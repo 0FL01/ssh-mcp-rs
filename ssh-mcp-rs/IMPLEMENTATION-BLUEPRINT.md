@@ -34,14 +34,14 @@
 
 ### Задачи
 
-- [ ] **1.1** Создать `Cargo.toml` с зависимостями
-- [ ] **1.2** Создать `src/main.rs` — entry point с `#[tokio::main]`
-- [ ] **1.3** Создать `src/config.rs`:
+- [x] **1.1** Создать `Cargo.toml` с зависимостями
+- [x] **1.2** Создать `src/main.rs` — entry point с `#[tokio::main]`
+- [x] **1.3** Создать `src/config.rs`:
   - Struct `Config` с полями: `host`, `port`, `user`, `password`, `key`, `timeout`, `max_chars`
   - Struct `Args` с `#[derive(Parser)]` от clap
   - `validate_config()` — проверка обязательных параметров
   - `parse_max_chars()` — поддержка "none" / 0 / число
-- [ ] **1.4** Создать `src/error.rs`:
+- [x] **1.4** Создать `src/error.rs`:
   ```rust
   #[derive(Debug, thiserror::Error)]
   pub enum SshMcpError {
@@ -57,7 +57,7 @@
       ElevationFailed(String),
   }
   ```
-- [ ] **1.5** Создать `src/lib.rs` — re-exports для тестов
+- [x] **1.5** Создать `src/lib.rs` — re-exports для тестов
 
 ### Результат фазы
 

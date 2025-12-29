@@ -1,0 +1,52 @@
+[package]
+name = "ssh-mcp"
+version = "1.4.0"
+edition = "2021"
+authors = ["tufantunc"]
+description = "MCP server exposing SSH control for Linux systems via Model Context Protocol"
+license = "MIT"
+repository = "https://github.com/tufantunc/ssh-mcp"
+homepage = "https://github.com/tufantunc/ssh-mcp#readme"
+keywords = ["ssh", "mcp", "model-context-protocol", "server", "linux", "automation", "remote", "cli"]
+
+[[bin]]
+name = "ssh-mcp"
+path = "src/main.rs"
+
+[dependencies]
+# MCP SDK
+rmcp = { version = "0.12", features = ["server", "transport-io"] }
+
+# SSH
+russh = "0.56"
+ssh-key = { version = "0.6", features = ["std"] }
+
+# Async runtime
+tokio = { version = "1", features = ["full", "signal"] }
+
+# CLI
+clap = { version = "4", features = ["derive", "env"] }
+
+# Error handling
+thiserror = "2"
+anyhow = "1"
+
+# Serialization (for MCP)
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Async utilities
+async-trait = "0.1"
+
+# Tracing/Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[dev-dependencies]
+testcontainers = "0.23"
+
+[profile.release]
+lto = true
+strip = true
+codegen-units = 1
+opt-level = "z"
