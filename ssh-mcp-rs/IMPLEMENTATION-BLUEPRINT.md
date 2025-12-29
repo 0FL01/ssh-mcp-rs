@@ -385,13 +385,14 @@ fn wrap_sudo_command(command: &str, password: Option<&str>) -> String {
 
 ### Задачи
 
-- [ ] **6.1** Создать `tests/unit.rs`:
+- [x] **6.1** Исправление clippy warnings (redundant closures, manual_async_fn, is_none_or, etc.)
+- [ ] **6.2** Создать `tests/unit.rs`:
   - `test_sanitize_command_valid`
   - `test_sanitize_command_empty`
   - `test_sanitize_command_too_long`
   - `test_escape_command_for_shell`
   - `test_config_parse_max_chars`
-- [ ] **6.2** Создать `tests/integration.rs` с testcontainers:
+- [ ] **6.3** Создать `tests/integration.rs` с testcontainers:
   ```rust
   use testcontainers::{runners::AsyncRunner, GenericImage};
 
@@ -404,12 +405,52 @@ fn wrap_sudo_command(command: &str, password: Option<&str>) -> String {
       // ...
   }
   ```
-- [ ] **6.3** Тесты: connection, reconnect, concurrent commands, timeout, sudo
-- [ ] **6.4** Ручная проверка с MCP Inspector:
+- [ ] **6.4** Тесты: connection, reconnect, concurrent commands, timeout, sudo
+- [ ] **6.5** Ручная проверка с MCP Inspector:
   ```bash
   npx @modelcontextprotocol/inspector ./target/release/ssh-mcp-rs -- \
     --host=YOUR_HOST --user=root --password=pass
   ```
+
+---
+
+## Phase 7: Code Polishing & Quality Assurance
+
+**Цель**: Улучшение качества кода, производительности и безопасности.
+
+### Задачи
+
+- [ ] **7.1** **Zero-copy optimization**: Использование `Cow<'a, str>` или `&str` в санитизации команд.
+- [ ] **7.2** **Logging enhancement**: Замена `println!` на `tracing` макросы во всех модулях.
+- [ ] **7.3** **Secure sensitive data**: Использование `secrecy` crate для хранения паролей в памяти.
+- [ ] **7.4** **Custom error types**: Более детальная типизация ошибок для каждого модуля.
+- [ ] **7.5** **Resource management**: Проверка на утечки дескрипторов при частых реконнектах.
+
+---
+
+## Phase 8: Documentation & Examples
+
+**Цель**: Создание качественной документации для пользователей и разработчиков.
+
+### Задачи
+
+- [x] **8.1** Создать `README.md` с гайдом по сборке и настройке.
+- [ ] **8.2** Добавить примеры конфигурации для различных MCP клиентов (Cursor, Claude Desktop, VS Code).
+- [ ] **8.3** Оформить `examples/` с использованием библиотеки программно.
+- [ ] **8.4** Проверить doc-комментарии (`cargo doc --open`).
+
+---
+
+## Phase 9: Production Readiness & Deployment
+
+**Цель**: Подготовка к релизу и CI/CD.
+
+### Задачи
+
+- [ ] **9.1** Создать `Dockerfile` для мультиплатформенной сборки.
+- [ ] **9.2** Настроить GitHub Actions для автоматического тестирования и сборки релизов.
+- [ ] **9.3** Оптимизация размера бинарного файла (LTO, stripping).
+- [ ] **9.4** Публикация на crates.io (опционально).
 
 ---
 
@@ -419,6 +460,7 @@ fn wrap_sudo_command(command: &str, password: Option<&str>) -> String {
 ssh-mcp-rs/
 ├── Cargo.toml
 ├── IMPLEMENTATION-BLUEPRINT.md
+├── README.md            # (Phase 8)
 ├── Docs/
 │   ├── rmcp-sdk.md
 │   └── russh-library.md
@@ -456,4 +498,7 @@ ssh-mcp-rs/
 | Phase 4 | 🔴 High | 6-10 |
 | Phase 5 | 🟢 Low | 3-4 |
 | Phase 6 | 🟡 Medium | 4-6 |
-| **Total** | | **22-33** |
+| Phase 7 | 🟡 Medium | 3-4 |
+| Phase 8 | 🟢 Low | 2-3 |
+| Phase 9 | 🟡 Medium | 3-4 |
+| **Total** | | **30-44** |
