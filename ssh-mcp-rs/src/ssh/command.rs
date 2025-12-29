@@ -34,7 +34,7 @@ impl CommandOutput {
 
     /// Check if the command succeeded (exit code 0 or no exit code available)
     pub fn success(&self) -> bool {
-        self.exit_code.map_or(true, |code| code == 0)
+        self.exit_code.is_none_or(|code| code == 0)
     }
 
     /// Get combined output (stdout + stderr)
@@ -225,35 +225,27 @@ impl SshConnectionManager {
     ) -> Result<CommandOutput> {
         let mut output = CommandOutput::new();
 
-        loop {
-            match channel.wait().await {
-                Some(msg) => {
-                    match msg {
-                        ChannelMsg::Data { data } => {
-                            output.stdout.push_str(&String::from_utf8_lossy(&data));
-                        }
-                        ChannelMsg::ExtendedData { data, ext } => {
-                            // ext == 1 is typically stderr
-                            if ext == 1 {
-                                output.stderr.push_str(&String::from_utf8_lossy(&data));
-                            } else {
-                                output.stdout.push_str(&String::from_utf8_lossy(&data));
-                            }
-                        }
-                        ChannelMsg::ExitStatus { exit_status } => {
-                            output.exit_code = Some(exit_status);
-                        }
-                        ChannelMsg::Close | ChannelMsg::Eof => {
-                            break;
-                        }
-                        _ => {
-                            // Ignore other messages
-                        }
+        while let Some(msg) = channel.wait().await {
+            match msg {
+                ChannelMsg::Data { data } => {
+                    output.stdout.push_str(&String::from_utf8_lossy(&data));
+                }
+                ChannelMsg::ExtendedData { data, ext } => {
+                    // ext == 1 is typically stderr
+                    if ext == 1 {
+                        output.stderr.push_str(&String::from_utf8_lossy(&data));
+                    } else {
+                        output.stdout.push_str(&String::from_utf8_lossy(&data));
                     }
                 }
-                None => {
-                    // Channel ended
+                ChannelMsg::ExitStatus { exit_status } => {
+                    output.exit_code = Some(exit_status);
+                }
+                ChannelMsg::Close | ChannelMsg::Eof => {
                     break;
+                }
+                _ => {
+                    // Ignore other messages
                 }
             }
         }

@@ -55,7 +55,7 @@ impl SshMcpServer {
             // Read the key file
             let key_content = tokio::fs::read_to_string(key_path)
                 .await
-                .map_err(|e| SshMcpError::Io(e))?;
+                .map_err(SshMcpError::Io)?;
             ssh_config = ssh_config.with_private_key(&key_content);
         }
 
@@ -287,77 +287,71 @@ impl ServerHandler for SshMcpServer {
     }
 
     /// List available tools
-    fn list_tools(
+    async fn list_tools(
         &self,
         _request: Option<PaginatedRequestParam>,
         _context: RequestContext<RoleServer>,
-    ) -> impl std::future::Future<Output = std::result::Result<ListToolsResult, McpError>> + Send + '_
-    {
-        async move {
-            debug!("list_tools called");
+    ) -> std::result::Result<ListToolsResult, McpError> {
+        debug!("list_tools called");
 
-            let mut tools = vec![Self::exec_tool()];
+        let mut tools = vec![Self::exec_tool()];
 
-            // Add sudo-exec tool if enabled
-            if !self.config.disable_sudo {
-                tools.push(Self::sudo_exec_tool());
-            }
-
-            Ok(ListToolsResult {
-                tools,
-                next_cursor: None,
-                meta: Default::default(),
-            })
+        // Add sudo-exec tool if enabled
+        if !self.config.disable_sudo {
+            tools.push(Self::sudo_exec_tool());
         }
+
+        Ok(ListToolsResult {
+            tools,
+            next_cursor: None,
+            meta: Default::default(),
+        })
     }
 
     /// Call a tool
-    fn call_tool(
+    async fn call_tool(
         &self,
         request: CallToolRequestParam,
         _context: RequestContext<RoleServer>,
-    ) -> impl std::future::Future<Output = std::result::Result<CallToolResult, McpError>> + Send + '_
-    {
-        async move {
-            let tool_name: &str = request.name.as_ref();
-            debug!("call_tool called: {:?}", tool_name);
+    ) -> std::result::Result<CallToolResult, McpError> {
+        let tool_name: &str = request.name.as_ref();
+        debug!("call_tool called: {:?}", tool_name);
 
-            let args = request.arguments.unwrap_or_default();
+        let args = request.arguments.unwrap_or_default();
 
-            // Route to the appropriate tool
-            match tool_name {
-                "exec" => {
-                    // Extract command from arguments
-                    let command = args
-                        .get("command")
-                        .and_then(|v| v.as_str())
-                        .ok_or_else(|| {
-                            McpError::invalid_params("Missing required parameter: command", None)
-                        })?;
+        // Route to the appropriate tool
+        match tool_name {
+            "exec" => {
+                // Extract command from arguments
+                let command = args
+                    .get("command")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| {
+                        McpError::invalid_params("Missing required parameter: command", None)
+                    })?;
 
-                    self.execute_command(command).await
-                }
-                "sudo_exec" | "sudo-exec" => {
-                    // Check if sudo is enabled
-                    if self.config.disable_sudo {
-                        return Err(McpError::invalid_params("sudo-exec tool is disabled", None));
-                    }
-
-                    // Extract command from arguments
-                    let command = args
-                        .get("command")
-                        .and_then(|v| v.as_str())
-                        .ok_or_else(|| {
-                            McpError::invalid_params("Missing required parameter: command", None)
-                        })?;
-
-                    self.execute_sudo_command(command).await
-                }
-                _ => Err(McpError::invalid_params(
-                    format!("Unknown tool: {}", tool_name),
-                    None,
-                )),
+                self.execute_command(command).await
             }
+            "sudo_exec" | "sudo-exec" => {
+                // Check if sudo is enabled
+                if self.config.disable_sudo {
+                    return Err(McpError::invalid_params("sudo-exec tool is disabled", None));
+                }
+
+                // Extract command from arguments
+                let command = args
+                    .get("command")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| {
+                        McpError::invalid_params("Missing required parameter: command", None)
+                    })?;
+
+                self.execute_sudo_command(command).await
+            }
+            _ => Err(McpError::invalid_params(
+                format!("Unknown tool: {}", tool_name),
+                None,
+            )),
         }
     }
 }

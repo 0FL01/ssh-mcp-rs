@@ -274,7 +274,7 @@ impl SshConnectionManager {
         Fut: std::future::Future<Output = Result<T>>,
     {
         let mut channel_guard = self.su_channel.lock().await;
-        f(&mut *channel_guard).await
+        f(&mut channel_guard).await
     }
 
     /// Ensure we have an elevated shell via `su`

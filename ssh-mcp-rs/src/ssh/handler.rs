@@ -32,11 +32,11 @@ impl russh::client::Handler for SshHandler {
     /// Currently accepts all server keys for simplicity in automated environments.
     /// In production, you may want to implement proper host key verification
     /// (check against known_hosts file or fingerprint whitelist).
-    fn check_server_key(
+    async fn check_server_key(
         &mut self,
         _server_public_key: &russh::keys::PublicKey,
-    ) -> impl std::future::Future<Output = Result<bool, Self::Error>> + Send {
-        async { Ok(true) }
+    ) -> Result<bool, Self::Error> {
+        Ok(true)
     }
 }
 

@@ -16,7 +16,7 @@ use ssh_mcp::server::SshMcpServer;
 #[tokio::main]
 async fn main() -> Result<()> {
     // Initialize tracing/logging to stderr (stdout is for MCP JSON-RPC)
-    let _subscriber = FmtSubscriber::builder()
+    FmtSubscriber::builder()
         .with_max_level(Level::INFO)
         .with_target(false)
         .with_writer(std::io::stderr)
