@@ -26,6 +26,6 @@ pub mod ssh;
 pub use config::{Args, Config};
 pub use error::{Result, SshMcpError};
 pub use ssh::{
-    escape_command_for_shell, sanitize_command, CommandOutput, SshConfig, SshConnectionManager,
-    SshHandler,
+    escape_command_for_shell, escape_for_shell, sanitize_command, sanitize_password,
+    wrap_sudo_command, CommandOutput, SshConfig, SshConnectionManager, SshHandler,
 };

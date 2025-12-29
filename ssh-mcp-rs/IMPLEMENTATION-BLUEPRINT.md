@@ -219,8 +219,15 @@ ssh-mcp-rs/
 
 ### Задачи
 
-- [ ] **4.1** Создать `src/ssh/elevation.rs`:
+- [x] **4.1** Создать `src/ssh/elevation.rs`:
   ```rust
+  // Реализовано: sudo wrapping utilities
+  pub fn wrap_sudo_command(command: &str, password: Option<&str>) -> String;
+  pub fn escape_for_shell(s: &str) -> String;
+  pub fn is_valid_password(password: &str) -> bool;
+  pub fn sanitize_password(password: Option<&str>) -> Option<String>;
+  
+  // su elevation реализовано в connection.rs:
   impl SshConnectionManager {
       pub async fn ensure_elevated(&self) -> Result<(), SshMcpError>;
       pub fn get_sudo_password(&self) -> Option<&str>;
@@ -254,6 +261,25 @@ fn wrap_sudo_command(command: &str, password: Option<&str>) -> String {
     }
 }
 ```
+
+### Результат фазы
+
+✅ **Завершено**: Созданы модули для privilege elevation:
+
+- `src/ssh/elevation.rs`:
+  - `wrap_sudo_command()` — оборачивает команду для выполнения с sudo
+  - `escape_for_shell()` — экранирование строк для shell (single quotes)
+  - `is_valid_password()` — валидация пароля
+  - `sanitize_password()` — санитизация пароля
+  - 11 unit-тестов + 2 doc-теста
+
+- `src/ssh/connection.rs` (su elevation):
+  - `ensure_elevated()` — интерактивная elevation через PTY shell + su
+  - `handle_su_elevation()` — обработка prompts и authentication
+  - `get_su_password()` / `get_sudo_password()` — получение паролей
+  - `set_su_password()` — установка su пароля с автоматической elevation
+
+- Обновлены экспорты в `ssh/mod.rs` и `lib.rs`
 
 ---
 

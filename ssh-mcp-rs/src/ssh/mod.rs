@@ -6,6 +6,7 @@
 pub mod command;
 pub mod config;
 pub mod connection;
+pub mod elevation;
 pub mod handler;
 pub mod sanitize;
 
@@ -13,5 +14,6 @@ pub mod sanitize;
 pub use command::CommandOutput;
 pub use config::SshConfig;
 pub use connection::SshConnectionManager;
+pub use elevation::{escape_for_shell, sanitize_password, wrap_sudo_command};
 pub use handler::SshHandler;
 pub use sanitize::{escape_command_for_shell, sanitize_command};
