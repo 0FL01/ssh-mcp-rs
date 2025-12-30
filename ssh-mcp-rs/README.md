@@ -49,7 +49,7 @@ The server is configured via CLI arguments or environment variables.
 | `--su-password` | `SSH_MCP_SU_PASSWORD` | Password for `su` elevation |
 | `--sudo-password` | `SSH_MCP_SUDO_PASSWORD` | Password for `sudo` pipes |
 | `--timeout` | `SSH_MCP_TIMEOUT` | Command timeout in ms (default: 60000) |
-| `--max-chars` | `SSH_MCP_MAX_CHARS` | Output limit (default: 1000, "none" to disable) |
+| `--maxChars` | `SSH_MCP_MAX_CHARS` | Output limit (default: 1000, "none" to disable) |
 | `--disable-sudo` | `SSH_MCP_DISABLE_SUDO` | Disable the `sudo-exec` tool |
 
 ## 🚀 Adding to MCP Clients
@@ -64,12 +64,12 @@ Add this to your `claude_desktop_config.json`:
     "ssh-remote": {
       "command": "/absolute/path/to/ssh-mcp",
       "args": [
-        "--host", "192.168.1.10",
-        "--port", "22",
-        "--user", "agent-nc",
-        "--key", "/path/to/private/key",
-        "--timeout", "30000",
-        "--max-chars", "none"
+        "--host=192.168.1.10",
+        "--port=22",
+        "--user=agent-nc",
+        "--key=/path/to/private/key",
+        "--timeout=30000",
+        "--maxChars=1000"
       ]
     }
   }

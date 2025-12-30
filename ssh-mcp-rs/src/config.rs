@@ -56,7 +56,7 @@ pub struct Args {
     /// Maximum characters for command length.
     /// Use "none", "0", or negative value to disable limit.
     /// Default: 1000
-    #[arg(long, env = "SSH_MCP_MAX_CHARS")]
+    #[arg(long = "maxChars", env = "SSH_MCP_MAX_CHARS")]
     pub max_chars: Option<String>,
 
     /// Disable the sudo-exec tool
