@@ -1,202 +1,123 @@
-# SSH MCP Server
+# SSH MCP Server (Rust Implementation)
 
-[![NPM Version](https://img.shields.io/npm/v/ssh-mcp)](https://www.npmjs.com/package/ssh-mcp)
-[![Downloads](https://img.shields.io/npm/dm/ssh-mcp)](https://www.npmjs.com/package/ssh-mcp)
-[![Node Version](https://img.shields.io/node/v/ssh-mcp)](https://nodejs.org/)
-[![License](https://img.shields.io/github/license/tufantunc/ssh-mcp)](./LICENSE)
-[![GitHub Stars](https://img.shields.io/github/stars/tufantunc/ssh-mcp?style=social)](https://github.com/tufantunc/ssh-mcp/stargazers)
-[![GitHub Forks](https://img.shields.io/github/forks/tufantunc/ssh-mcp?style=social)](https://github.com/tufantunc/ssh-mcp/forks)
-[![Build Status](https://github.com/tufantunc/ssh-mcp/actions/workflows/publish.yml/badge.svg)](https://github.com/tufantunc/ssh-mcp/actions)
-[![GitHub issues](https://img.shields.io/github/issues/tufantunc/ssh-mcp)](https://github.com/tufantunc/ssh-mcp/issues)
+[![Rust](https://img.shields.io/badge/rust-stable-brightgreen.svg)](https://www.rust-lang.org/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Protocol: MCP](https://img.shields.io/badge/Protocol-MCP-blue.svg)](https://modelcontextprotocol.io)
 
-[![Trust Score](https://archestra.ai/mcp-catalog/api/badge/quality/tufantunc/ssh-mcp)](https://archestra.ai/mcp-catalog/tufantunc__ssh-mcp)
+A high-performance Rust implementation of the SSH Model Context Protocol (MCP) server. This tool allows AI models to securely interact with remote Linux systems over SSH, providing tools for command execution and administrative tasks.
 
-**SSH MCP Server** is a local Model Context Protocol (MCP) server that exposes SSH control for Linux and Windows systems, enabling LLMs and other MCP clients to execute shell commands securely via SSH.
+> This project is a comprehensive Rust port of the [TypeScript SSH MCP Server](https://github.com/tufantunc/ssh-mcp). It aims for complete feature parity with the original implementation while introducing unique, advanced features in the future.
 
-## Contents
+## ✨ Features
 
-- [Quick Start](#quick-start)
-- [Features](#features)
-- [Installation](#installation)
-- [Client Setup](#client-setup)
-- [Testing](#testing)
-- [Disclaimer](#disclaimer)
-- [Support](#support)
+- **Persistent Connections**: Maintains a single SSH session across multiple tool calls for maximum speed.
+- **Auto-Reconnect**: Automatically restores the connection if it drops.
+- **Interactive Elevation**: Supports `su` elevation with PTY shell for full root access.
+- **Sudo Integration**: Provides a `sudo-exec` tool with password wrapping.
+- **Command Sanitization**: Built-in safety checks for command inputs.
+- **Output Control**: Configurable output length limits to prevent token overflow.
+- **Cross-Platform**: Compiled binary runs on any system with SSH access.
 
-## Quick Start
+## 📊 Performance
 
-- [Install](#installation) SSH MCP Server
-- [Configure](#configuration) SSH MCP Server
-- [Set up](#client-setup) your MCP Client (e.g. Claude Desktop, Cursor, etc)
-- Execute remote shell commands on your Linux or Windows server via natural language
+| Metric | TypeScript (Node.js) | Rust (Native) | Difference |
+|--------|----------------------|---------------|------------|
+| **RAM (RSS)** | ~82.5 MB | ~5.4 MB | **~15x more efficient** |
+| **CPU Time (Start)** | 0.55s | 0.01s | **Near-zero overhead** |
+| **Response Speed** | Instant | Instant | Limited by SSH latency |
 
-## Features
+### 🛠️ Test Methodology
 
-- MCP-compliant server exposing SSH capabilities
-- Execute shell commands on remote Linux and Windows systems
-- Secure authentication via password or SSH key
-- Built with TypeScript and the official MCP SDK
-- **Configurable timeout protection** with automatic process abortion
-- **Graceful timeout handling** - attempts to kill hanging processes before closing connections
+To evaluate performance, the following scenarios were executed:
 
-### Tools
+1.  **Warmup**: A simple `echo` command to verify connectivity.
+2.  **Listing**: The command `find /usr -maxdepth 2 | head -n 50` to generate a data stream.
 
-- `exec`: Execute a shell command on the remote server
-  - **Parameters:**
-    - `command` (required): Shell command to execute on the remote SSH server
-  - **Timeout Configuration:**
+**Monitoring Details:**
 
-- `sudo-exec`: Execute a shell command with sudo elevation
-  - **Parameters:**
-    - `command` (required): Shell command to execute as root using sudo
-  - **Notes:**
-    - Requires `--sudoPassword` to be set for password-protected sudo
-    - Can be disabled by passing the `--disableSudo` flag at startup if sudo access is not needed or not available
-    - For persistent root access, consider using `--suPassword` instead which establishes a root shell
-    - Tool will not be available at all if server is started with `--disableSudo`
-  - **Timeout Configuration:**
-    - Timeout is configured via command line argument `--timeout` (in milliseconds)
-    - Default timeout: 60000ms (1 minute)
-    - When a command times out, the server automatically attempts to abort the running process before closing the connection
-  - **Max Command Length Configuration:**
-    - Max command characters are configured via `--maxChars`
-    - Default: `1000`
-    - No-limit mode: set `--maxChars=none` or any `<= 0` value (e.g. `--maxChars=0`)
+-   **Tools**: A monitoring script polled `/proc/[PID]/stat` every 100ms.
+-   **Memory**: The TypeScript process demonstrated stable memory usage around **82 MB** (typical for Node.js runtime), whereas the Rust process consumed only **~5.4 MB**, highlighting a massive reduction in base overhead.
+-   **CPU**: Both implementations showed minimal load during command execution (<10ms CPU time for the sequence), indicating high I/O efficiency. However, Rust demonstrated significantly lower initialization time (accumulated CPU time).
 
-## Installation
+## 🛠 Installation
 
-1. **Clone the repository:**
-   ```bash
-   git clone https://github.com/tufantunc/ssh-mcp.git
-   cd ssh-mcp
-   ```
-2. **Install dependencies:**
-   ```bash
-   npm install
-   ```
+### Prerequisites
 
-## Client Setup
+- [Rust toolchain](https://rustup.rs/) (cargo, rustc)
+- `pkg-config` and OpenSSL headers (usually `libssl-dev` on Ubuntu/Debian)
 
-You can configure your IDE or LLM like Cursor, Windsurf, Claude Desktop to use this MCP Server.
+### Build from Source
 
-**Required Parameters:**
-- `host`: Hostname or IP of the Linux or Windows server
-- `user`: SSH username
+```bash
+git clone https://github.com/0FL01/ssh-mcp-rs.git
+cd ssh-mcp-rs
+cargo build --release
+```
 
-**Optional Parameters:**
-- `port`: SSH port (default: 22)
-- `password`: SSH password (or use `key` for key-based auth)
-- `key`: Path to private SSH key
-- `sudoPassword`: Password for sudo elevation (when executing commands with sudo)
-- `suPassword`: Password for su elevation (when you need a persistent root shell)
-- `timeout`: Command execution timeout in milliseconds (default: 60000ms = 1 minute)
-- `maxChars`: Maximum allowed characters for the `command` input (default: 1000). Use `none` or `0` to disable the limit.
-- `disableSudo`: Flag to disable the `sudo-exec` tool completely. Useful when sudo access is not needed or not available.
+The binary will be available at `./target/release/ssh-mcp`.
 
+## ⚙️ Configuration
 
-```commandline
+The server is configured via CLI arguments or environment variables.
+
+| Argument | Environment Variable | Description |
+|----------|----------------------|-------------|
+| `--host` | `SSH_MCP_HOST` | SSH host (required) |
+| `--user` | `SSH_MCP_USER` | SSH username (required) |
+| `--port` | `SSH_MCP_PORT` | SSH port (default: 22) |
+| `--password` | `SSH_MCP_PASSWORD` | SSH password (alt to key) |
+| `--key` | `SSH_MCP_KEY` | Path to private key file |
+| `--su-password` | `SSH_MCP_SU_PASSWORD` | Password for `su` elevation |
+| `--sudo-password` | `SSH_MCP_SUDO_PASSWORD` | Password for `sudo` pipes |
+| `--timeout` | `SSH_MCP_TIMEOUT` | Command timeout in ms (default: 60000) |
+| `--maxChars` | `SSH_MCP_MAX_CHARS` | Output limit (default: 1000, "none" to disable) |
+| `--disable-sudo` | `SSH_MCP_DISABLE_SUDO` | Disable the `sudo-exec` tool |
+
+## 🚀 Adding to MCP Clients
+
+### Claude Desktop
+
+Add this to your `claude_desktop_config.json`:
+
+```json
 {
-    "mcpServers": {
-        "ssh-mcp": {
-            "command": "npx",
-            "args": [
-                "ssh-mcp",
-                "-y",
-                "--",
-                "--host=1.2.3.4",
-                "--port=22",
-                "--user=root",
-                "--password=pass",
-                "--key=path/to/key",
-                "--timeout=30000",
-                "--maxChars=none"
-            ]
-        }
+  "mcpServers": {
+    "ssh-remote": {
+      "command": "/absolute/path/to/ssh-mcp",
+      "args": [
+        "--host=192.168.1.10",
+        "--port=22",
+        "--user=agent-nc",
+        "--key=/path/to/private/key",
+        "--timeout=30000",
+        "--maxChars=1000"
+      ]
     }
+  }
 }
 ```
 
-### Claude Code
+## 🛠 Tools
 
-You can add this MCP server to Claude Code using the `claude mcp add` command. This is the recommended method for Claude Code.
+The server exposes the following MCP tools:
 
-**Basic Installation:**
+### `exec`
+Execute a shell command as the connected user.
+- **Arguments**:
+  - `command` (string): The shell command to execute.
 
-```bash
-claude mcp add --transport stdio ssh-mcp -- npx -y ssh-mcp -- --host=YOUR_HOST --user=YOUR_USER --password=YOUR_PASSWORD
-```
+### `sudo-exec`
+Execute a command with root privileges using `sudo`.
+- **Arguments**:
+  - `command` (string): The shell command to execute with sudo.
+- **Note**: This tool uses the `--sudo-password` provided at startup.
 
-**Installation Examples:**
+## 🔒 Security
 
-**With Password Authentication:**
-```bash
-claude mcp add --transport stdio ssh-mcp -- npx -y ssh-mcp -- --host=192.168.1.100 --port=22 --user=admin --password=your_password
-```
+- **Stdio Transport**: Communicates using JSON-RPC over stdin/stdout, ensuring no exposed ports.
+- **Credential Storage**: Passwords and keys are only kept in memory and never logged.
+- **Logging**: All internal logs are sent to `stderr` to avoid interfering with the MCP protocol.
 
-**With SSH Key Authentication:**
-```bash
-claude mcp add --transport stdio ssh-mcp -- npx -y ssh-mcp -- --host=example.com --user=root --key=/path/to/private/key
-```
+## 📄 License
 
-**With Custom Timeout and No Character Limit:**
-```bash
-claude mcp add --transport stdio ssh-mcp -- npx -y ssh-mcp -- --host=192.168.1.100 --user=admin --password=your_password --timeout=120000 --maxChars=none
-```
-
-**With Sudo and Su Support:**
-```bash
-claude mcp add --transport stdio ssh-mcp -- npx -y ssh-mcp -- --host=192.168.1.100 --user=admin --password=your_password --sudoPassword=sudo_pass --suPassword=root_pass
-```
-
-**Installation Scopes:**
-
-You can specify the scope when adding the server:
-
-- **Local scope** (default): For personal use in the current project
-  ```bash
-  claude mcp add --transport stdio ssh-mcp --scope local -- npx -y ssh-mcp -- --host=YOUR_HOST --user=YOUR_USER --password=YOUR_PASSWORD
-  ```
-
-- **Project scope**: Share with your team via `.mcp.json` file
-  ```bash
-  claude mcp add --transport stdio ssh-mcp --scope project -- npx -y ssh-mcp -- --host=YOUR_HOST --user=YOUR_USER --password=YOUR_PASSWORD
-  ```
-
-- **User scope**: Available across all your projects
-  ```bash
-  claude mcp add --transport stdio ssh-mcp --scope user -- npx -y ssh-mcp -- --host=YOUR_HOST --user=YOUR_USER --password=YOUR_PASSWORD
-  ```
-
-
-**Verify Installation:**
-
-After adding the server, restart Claude Code and ask Cascade to execute a command:
-```
-"Can you run 'ls -la' on the remote server?"
-```
-
-For more information about MCP in Claude Code, see the [official documentation](https://docs.claude.com/en/docs/claude-code/mcp).
-
-## Testing
-
-You can use the [MCP Inspector](https://modelcontextprotocol.io/docs/tools/inspector) for visual debugging of this MCP Server.
-
-```sh
-npm run inspect
-```
-
-## Disclaimer
-
-SSH MCP Server is provided under the [MIT License](./LICENSE). Use at your own risk. This project is not affiliated with or endorsed by any SSH or MCP provider.
-
-## Contributing
-
-We welcome contributions! Please see our [Contributing Guidelines](./CONTRIBUTING.md) for more information.
-
-## Code of Conduct
-
-This project follows a [Code of Conduct](./CODE_OF_CONDUCT.md) to ensure a welcoming environment for everyone.
-
-## Support
-
-If you find SSH MCP Server helpful, consider starring the repository or contributing! Pull requests and feedback are welcome. 
+This project is licensed under the MIT License - see the LICENSE file for details.
