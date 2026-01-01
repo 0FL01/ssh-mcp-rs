@@ -41,12 +41,45 @@ To evaluate performance, the following scenarios were executed:
 
 ## 🛠 Installation
 
-### Prerequisites
+### Pre-built Binaries (Recommended)
+
+Download the latest rolling release for your platform from the [Releases page](https://github.com/0FL01/ssh-mcp-rs/releases/tag/rolling).
+
+| Platform | Download Link |
+|----------|---------------|
+| **Linux x86_64** | [ssh-mcp-linux-x86_64](https://github.com/0FL01/ssh-mcp-rs/releases/download/rolling/ssh-mcp-linux-x86_64) |
+| **Windows x86_64** | [ssh-mcp-windows-x86_64.exe](https://github.com/0FL01/ssh-mcp-rs/releases/download/rolling/ssh-mcp-windows-x86_64.exe) |
+| **macOS ARM64** | [ssh-mcp-macos-aarch64](https://github.com/0FL01/ssh-mcp-rs/releases/download/rolling/ssh-mcp-macos-aarch64) |
+
+**Quick install (Linux/macOS):**
+```bash
+# Download and install
+curl -L https://github.com/0FL01/ssh-mcp-rs/releases/download/rolling/ssh-mcp-linux-x86_64 -o ssh-mcp
+chmod +x ssh-mcp
+sudo mv ssh-mcp /usr/local/bin/
+
+# Verify installation
+ssh-mcp --version
+```
+
+**Quick install (Windows PowerShell):**
+```powershell
+# Download
+Invoke-WebRequest -Uri "https://github.com/0FL01/ssh-mcp-rs/releases/download/rolling/ssh-mcp-windows-x86_64.exe" -OutFile "ssh-mcp.exe"
+
+# Add to PATH (choose a directory in your PATH or add current directory)
+# Verify installation
+.\ssh-mcp.exe --version
+```
+
+### Build from Source
+
+#### Prerequisites
 
 - [Rust toolchain](https://rustup.rs/) (cargo, rustc)
 - `pkg-config` and OpenSSL headers (usually `libssl-dev` on Ubuntu/Debian)
 
-### Build from Source
+#### Build
 
 ```bash
 git clone https://github.com/0FL01/ssh-mcp-rs.git
