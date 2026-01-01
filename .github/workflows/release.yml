@@ -95,26 +95,27 @@ jobs:
       - name: Set SHORT_SHA env
         run: echo "SHORT_SHA=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
 
-      - name: Create release archive
+      - name: Prepare assets
         run: |
-          cd artifacts
-          for dir in */; do
-            cd "$dir"
-            chmod +x ssh-mcp* 2>/dev/null || true
-            cd ..
+          mkdir -p dist
+          for dir in artifacts/*/; do
+            dirname=$(basename "$dir")
+            cp "${dir}"* "dist/${dirname}"
           done
+          chmod +x dist/*
 
       - name: Delete existing rolling release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release delete rolling --yes || true
+          gh release delete rolling --cleanup-tag --yes || true
 
       - name: Create rolling release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create rolling \
+            --target ${{ github.sha }} \
             --title "Rolling Release (${{ env.SHORT_SHA }})" \
             --notes "Latest rolling build from commit ${{ env.SHORT_SHA }}. Built from branch \`main\`." \
-            artifacts/*/ssh-mcp*
+            dist/*
