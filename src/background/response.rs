@@ -106,5 +106,5 @@ pub(crate) fn background_json_err(error: &str, stderr: &str) -> CallToolResult {
     );
     let body = serde_json::Value::Object(obj).to_string();
 
-    CallToolResult::success(vec![ContentBlock::text(body)])
+    CallToolResult::error(vec![ContentBlock::text(body)])
 }

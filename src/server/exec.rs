@@ -172,11 +172,10 @@ impl SshMcpServer {
             None => None,
         };
 
-        let exit_code_u32 = registry_exit_code
+        let exit_code = registry_exit_code
             .or(join_exit_code)
             .and_then(|code| u32::try_from(code).ok())
-            .unwrap_or(255)
-            .min(255);
+            .map(|code| code.min(255));
 
         let mut file = match tokio::fs::File::open(&final_log_path_buf).await {
             Ok(f) => f,
@@ -270,7 +269,7 @@ impl SshMcpServer {
         let output = CommandOutput {
             stdout,
             stderr: String::new(),
-            exit_code: Some(exit_code_u32),
+            exit_code,
             ..Default::default()
         };
         Ok(Self::calltool_from_command_output(output))

@@ -280,6 +280,10 @@ async fn test_check_process_completed() {
         .test_check_process_with_wait(&bg_resp.job_id, 50, 2)
         .await
         .expect("Failed to wait before checking process");
+    assert!(
+        !check_result.is_error.unwrap_or(false),
+        "a successful status query should not be an MCP error"
+    );
     let waited = wait_started.elapsed();
     let status = parse_check_process_response(&check_result);
 

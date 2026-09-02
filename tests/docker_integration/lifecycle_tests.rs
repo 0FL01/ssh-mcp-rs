@@ -512,12 +512,41 @@ async fn background_transfer_is_immediately_pollable_and_completes() {
             "id": 103,
             "method": "tools/call",
             "params": {
+                "name": "transfer",
+                "arguments": {
+                    "operation": "put",
+                    "local_path": "payload.txt",
+                    "remote_path": remote_path.clone(),
+                    "transport": "exec-raw",
+                    "kind": "file",
+                    "overwrite": false,
+                    "timeout_ms": 30000
+                }
+            }
+        }))
+        .await;
+    let rejected = process.response(103).await;
+    assert!(
+        rejected.get("error").is_none(),
+        "transfer RPC failed: {rejected}"
+    );
+    assert_eq!(rejected["result"]["isError"], true, "{rejected}");
+    let rejected_body: Value =
+        serde_json::from_str(tool_text(&rejected)).expect("failed transfer response JSON");
+    assert_eq!(rejected_body["ok"], false, "{rejected_body}");
+
+    process
+        .send(json!({
+            "jsonrpc": "2.0",
+            "id": 104,
+            "method": "tools/call",
+            "params": {
                 "name": "shell",
                 "arguments": {"command": format!("cat -- '{}' && rm -f -- '{}'", remote_path, remote_path)}
             }
         }))
         .await;
-    let remote = process.response(103).await;
+    let remote = process.response(104).await;
     assert_eq!(tool_text(&remote), "background transfer\n");
 
     process.close_stdin().await;

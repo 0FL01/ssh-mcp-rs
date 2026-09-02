@@ -518,13 +518,20 @@ impl SshMcpServer {
             result_text.push_str(&output.stderr);
         }
 
-        // Check for error exit code.
-        // exit_code=None means the SSH channel was torn down without delivering
-        // an exit status or exit signal — treat as error, not success.
-        if output.exit_code.map(|code| code != 0).unwrap_or(true) {
-            CallToolResult::error(vec![ContentBlock::text(result_text)])
-        } else {
-            CallToolResult::success(vec![ContentBlock::text(result_text)])
+        match output.exit_code {
+            Some(0) => CallToolResult::success(vec![ContentBlock::text(result_text)]),
+            exit_code => {
+                if !result_text.is_empty() {
+                    result_text.push_str("\n\n");
+                }
+                match exit_code {
+                    Some(code) => {
+                        result_text.push_str(&format!("Command failed with exit code {code}"));
+                    }
+                    None => result_text.push_str("Command failed: exit status unavailable"),
+                }
+                CallToolResult::error(vec![ContentBlock::text(result_text)])
+            }
         }
     }
 
@@ -619,10 +626,13 @@ impl SshMcpServer {
         cancellation: CancellationToken,
     ) -> std::result::Result<CallToolResult, McpError> {
         let resp = self.run_transfer_response(params, cancellation, None).await;
-        let body = resp
-            .to_json(verbose)
-            .unwrap_or_else(|_| "{\"ok\":false,\"error\":\"serialization_error\"}".to_string());
-        Ok(CallToolResult::success(vec![ContentBlock::text(body)]))
+        Ok(match resp.to_json(verbose) {
+            Ok(body) if resp.ok => CallToolResult::success(vec![ContentBlock::text(body)]),
+            Ok(body) => CallToolResult::error(vec![ContentBlock::text(body)]),
+            Err(_) => CallToolResult::error(vec![ContentBlock::text(
+                "{\"ok\":false,\"error\":\"serialization_error\"}",
+            )]),
+        })
     }
 
     async fn execute_background_transfer(
@@ -702,7 +712,7 @@ impl ServerHandler for SshMcpServer {
             .with_protocol_version(ProtocolVersion::LATEST)
             .with_server_info(server_implementation())
             .with_instructions(format!(
-                "SeSSHion v{} - SSH MCP server for {}@{}:{}",
+                "SeSSHion v{} - SSH MCP server for {}@{}:{}\nFor this server's tools, do not separately narrate successful intermediate calls. If a call fails or a polled operation reaches failed or state_lost, briefly explain what happened and the next step in user-facing text; do not leave the tool result as the only notice. A timeout handoff for a still-running job is not a terminal failure.",
                 env!("CARGO_PKG_VERSION"),
                 self.config.user,
                 self.config.host,
@@ -866,6 +876,87 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn test_server_instructions_define_user_facing_error_policy() {
+        let spool = tempfile::tempdir().expect("temp spool parent");
+        let server = SshMcpServer::new_with_spool_dir(
+            Config {
+                host: "example.test".to_string(),
+                port: 22,
+                user: "tester".to_string(),
+                password: None,
+                key: None,
+                jump: None,
+                su_password: None,
+                sudo_password: None,
+                timeout_ms: 1_000,
+                max_chars: Some(1_000),
+                max_output_tokens: Some(1_000),
+                disable_sudo: true,
+                keepalive_interval: 30,
+                keepalive_max: 3,
+                reconnect_retries: 0,
+                reconnect_backoff_ms: 250,
+                health_probe_timeout_ms: 1_500,
+                strict_host_key_checking: crate::ssh::HostKeyCheckMode::No,
+                known_hosts: None,
+            },
+            Some(spool.path().join("logs")),
+        )
+        .await
+        .expect("server construction");
+
+        let instructions = server.get_info().instructions.expect("server instructions");
+        assert!(instructions.contains("SSH MCP server for tester@example.test:22"));
+        assert!(instructions.contains("do not separately narrate successful intermediate calls"));
+        assert!(instructions.contains("do not leave the tool result as the only notice"));
+        assert!(
+            instructions
+                .contains("timeout handoff for a still-running job is not a terminal failure")
+        );
+
+        server.shutdown().await;
+    }
+
+    #[test]
+    fn test_command_results_include_failure_status_context() {
+        let failed = SshMcpServer::calltool_from_command_output(CommandOutput {
+            stdout: "partial output".to_string(),
+            stderr: "remote error".to_string(),
+            exit_code: Some(7),
+            ..Default::default()
+        });
+        assert!(failed.is_error.unwrap_or(false));
+        assert_eq!(
+            extract_text_from_result(&failed),
+            "partial output\n--- stderr ---\nremote error\n\nCommand failed with exit code 7"
+        );
+
+        let empty = SshMcpServer::calltool_from_command_output(CommandOutput {
+            exit_code: Some(7),
+            ..Default::default()
+        });
+        assert_eq!(
+            extract_text_from_result(&empty),
+            "Command failed with exit code 7"
+        );
+
+        let unavailable = SshMcpServer::calltool_from_command_output(CommandOutput::default());
+        assert!(unavailable.is_error.unwrap_or(false));
+        assert_eq!(
+            extract_text_from_result(&unavailable),
+            "Command failed: exit status unavailable"
+        );
+
+        let succeeded = SshMcpServer::calltool_from_command_output(CommandOutput {
+            stdout: "ok".to_string(),
+            exit_code: Some(0),
+            ..Default::default()
+        });
+        assert!(!succeeded.is_error.unwrap_or(false));
+        assert_eq!(extract_text_from_result(&succeeded), "ok");
+    }
+
     #[test]
     fn test_resolve_local_spooler_rejects_relative_override() {
         let error = resolve_local_spooler(Some(PathBuf::from("relative/spool")))
@@ -968,6 +1059,8 @@ mod tests {
         let result = background_json_err(&long_error, &long_stderr);
         let text = extract_text_from_result(&result);
 
+        assert!(result.is_error.unwrap_or(false));
+
         let value: serde_json::Value =
             serde_json::from_str(text.trim()).expect("background_json_err should return JSON");
 
@@ -1023,6 +1116,8 @@ mod tests {
             },
         );
         let text = extract_text_from_result(&result);
+
+        assert!(!result.is_error.unwrap_or(false));
 
         let value: serde_json::Value =
             serde_json::from_str(text.trim()).expect("background_json_timeout should return JSON");
