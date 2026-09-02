@@ -1,6 +1,6 @@
 # Goal: SSH jump host support
 
-Status: active
+Status: complete
 Source: user-approved SSH jump-host plan in the current task
 Last updated: 2026-09-02
 
@@ -41,8 +41,8 @@ Complete the frozen Required Outcomes using the listed Change Envelope and Prima
   - Source: explicit instruction to commit, push, and build.
   - Acceptance: required Rust checks and release build succeed; implementation commits are pushed to the current remote branch.
   - Primary evidence: command results, commit hashes, and remote push result.
-  - Status: in_progress
-  - Evidence: `cargo fmt --all -- --check`, Clippy with `-D warnings`, `cargo test --all-features`, and `cargo build --release` passed; commit and push remain.
+  - Status: verified
+  - Evidence: `cargo fmt --all -- --check`, Clippy with `-D warnings`, `cargo test --all-features`, and `cargo build --release` passed; implementation commit `34cae4a` was pushed to `origin/dev`.
 
 ### Constraints
 - C1: Use the existing `russh` and OpenSSH mechanisms; add no dependency, forwarding service, or raw user ProxyCommand.
@@ -62,16 +62,16 @@ Complete the frozen Required Outcomes using the listed Change Envelope and Prima
 - User or harness budget: smallest complete one-hop implementation; no unrelated cleanup.
 
 ## Current Checkpoint
-- Closes: R5
-- Smallest next action: run the affected repository gates and release build, review the diff, then commit and push only objective-owned changes.
-- Expected evidence: formatting, lint/test compilation, release build, scoped commits, and push succeed.
-- Stop or replan if: a mandatory gate exposes an in-scope regression or objective-owned changes cannot be separated from pre-existing working-tree edits.
+- Closes: none; objective complete.
+- Smallest next action: stop.
+- Expected evidence: all required outcomes remain verified.
+- Stop or replan if: a new authoritative request creates a separate objective.
 
 ## Current State
-- Resolved: R1-R4 configuration, native route, transfers, and documentation.
-- Last relevant evidence: focused configuration, transfer, and two Docker jump tests passed.
+- Resolved: R1-R5 configuration, native route, transfers, documentation, build, commit, and push.
+- Last relevant evidence: all-feature tests and release build passed; `34cae4a` is on `origin/dev`.
 - Blocker: none.
-- Next: verify and publish R5.
+- Next: none.
 
 ## Material Decisions
 - 2026-09-02: Jump credentials are explicit and exactly one of key/password; no inheritance from target.
@@ -82,9 +82,10 @@ Complete the frozen Required Outcomes using the listed Change Envelope and Prima
 - 2026-09-02: Contract frozen after parallel configuration, native-route, and transfer reviews; next checkpoint is R1.
 - 2026-09-02: R1 verified by focused configuration tests; next checkpoint is native route R2.
 - 2026-09-02: R2-R4 verified by transfer unit tests and two Docker jump tests; next checkpoint is build and publication R5.
+- 2026-09-02: R5 verified; implementation commit `34cae4a` pushed to `origin/dev`; closure check passed.
 
 ## Completion
-- Resolved outcomes:
-- Commands and artifacts:
-- Constraint and diff-scope check:
-- Final status: active
+- Resolved outcomes: R1-R5.
+- Commands and artifacts: focused config/transfer tests, two Docker jump tests, full all-feature suite, Clippy, formatting, release build, README, and implementation commit `34cae4a`.
+- Constraint and diff-scope check: no dependency, proxy service, raw ProxyCommand, credential inheritance, or unrelated working-tree changes were included.
+- Final status: complete
