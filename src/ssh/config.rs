@@ -54,6 +54,9 @@ pub struct SshConfig {
     /// Private key content (not path!) for key authentication
     pub private_key: Option<String>,
 
+    /// Optional SSH jump host with independent authentication material.
+    pub jump: Option<SshJumpConfig>,
+
     /// Password for `su` elevation to root
     pub su_password: Option<String>,
 
@@ -88,6 +91,16 @@ pub struct SshConfig {
     pub known_hosts: Option<PathBuf>,
 }
 
+/// Runtime configuration for one SSH jump host.
+#[derive(Debug, Clone)]
+pub struct SshJumpConfig {
+    pub host: String,
+    pub port: u16,
+    pub username: String,
+    pub password: Option<String>,
+    pub private_key: Option<String>,
+}
+
 impl SshConfig {
     /// Create a new SSH configuration with minimal required fields
     pub fn new(host: impl Into<String>, username: impl Into<String>) -> Self {
@@ -97,6 +110,7 @@ impl SshConfig {
             username: username.into(),
             password: None,
             private_key: None,
+            jump: None,
             su_password: None,
             sudo_password: None,
             keepalive_interval: 30,
@@ -125,6 +139,12 @@ impl SshConfig {
     /// Set private key authentication (key content, not path)
     pub fn with_private_key(mut self, key: impl Into<String>) -> Self {
         self.private_key = Some(key.into());
+        self
+    }
+
+    /// Route the target connection through one SSH jump host.
+    pub fn with_jump(mut self, jump: SshJumpConfig) -> Self {
+        self.jump = Some(jump);
         self
     }
 

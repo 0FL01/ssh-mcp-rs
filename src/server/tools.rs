@@ -64,7 +64,7 @@ pub(super) fn transfer_tool() -> Tool {
                 "type": "string",
                 "enum": ["auto", "exec-raw", "sftp", "scp", "rsync"],
                 "default": "auto",
-                "description": "auto: rsync, then sftp, scp, exec-raw; sftp/scp need --key; exec-raw needs no local OpenSSH."
+                "description": "auto: rsync>sftp>scp>exec-raw; rsync/sftp/scp need keys on target+jump; exec-raw supports passwords."
             },
             "kind": {
                 "type": "string",
@@ -221,9 +221,9 @@ mod tests {
             .as_str()
             .expect("transport description");
 
-        assert!(transport_description.contains("rsync, then sftp, scp, exec-raw"));
-        assert!(transport_description.contains("sftp/scp need --key"));
-        assert!(!transport_description.contains("sftp/scp/rsync"));
+        assert!(transport_description.contains("rsync>sftp>scp>exec-raw"));
+        assert!(transport_description.contains("rsync/sftp/scp need keys on target+jump"));
+        assert!(transport_description.contains("exec-raw supports passwords"));
     }
 
     #[test]

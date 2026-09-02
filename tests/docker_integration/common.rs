@@ -1,7 +1,7 @@
 //! Common test utilities for Docker integration tests
 
 pub use ssh_mcp::transfer::{TransferKind, TransferOperation, TransferParams, TransferTransport};
-pub use ssh_mcp::{Config, SshMcpServer};
+pub use ssh_mcp::{Config, JumpConfig, SshMcpServer};
 pub use std::sync::Once;
 pub use testcontainers::runners::AsyncRunner;
 pub use testcontainers::{GenericImage, ImageExt};
@@ -127,6 +127,14 @@ AAAEDCxgrF63olxn5oZkm+x+wntKjbSB9nWO+mazmilqLU5pntvVTUo53qNWwM84VBkVWi\n\
 pub const TEST_PUBLIC_KEY: &str =
     "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJntvVTUo53qNWwM84VBkVWi3gFo0z7aFPLpGIP9O1z5 ssh-mcp-test";
 
+pub const JUMP_TEST_PRIVATE_KEY: &str = "-----BEGIN OPENSSH PRIVATE KEY-----\n\
+b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW\n\
+QyNTUxOQAAACAEeFcWhCmMD2wSOlm4lS5pF1V0i6CDOUnv18OJ/o0ktwAAAJio1GXWqNRl\n\
+1gAAAAtzc2gtZWQyNTUxOQAAACAEeFcWhCmMD2wSOlm4lS5pF1V0i6CDOUnv18OJ/o0ktw\n\
+AAAECPs/ItTkV/La3E+WUzf5W4IxJq/OVBnoNMAqTS2eSa3wR4VxaEKYwPbBI6WbiVLmkX\n\
+VXSLoIM5Se/Xw4n+jSS3AAAAEXNzaC1tY3AtanVtcC10ZXN0AQIDBA==\n\
+-----END OPENSSH PRIVATE KEY-----\n";
+
 /// Setup SSH key for authentication
 pub fn setup_test_key() -> (tempfile::TempDir, std::path::PathBuf) {
     let key_dir = tempfile::TempDir::new().expect("tempdir");
@@ -137,6 +145,19 @@ pub fn setup_test_key() -> (tempfile::TempDir, std::path::PathBuf) {
         use std::os::unix::fs::PermissionsExt;
         let perms = std::fs::Permissions::from_mode(0o600);
         std::fs::set_permissions(&key_path, perms).expect("chmod key");
+    }
+    (key_dir, key_path)
+}
+
+pub fn setup_jump_test_key() -> (tempfile::TempDir, std::path::PathBuf) {
+    let key_dir = tempfile::TempDir::new().expect("tempdir");
+    let key_path = key_dir.path().join("jump_ed25519");
+    std::fs::write(&key_path, JUMP_TEST_PRIVATE_KEY).expect("write jump private key");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let perms = std::fs::Permissions::from_mode(0o600);
+        std::fs::set_permissions(&key_path, perms).expect("chmod jump key");
     }
     (key_dir, key_path)
 }

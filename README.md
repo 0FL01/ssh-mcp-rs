@@ -91,8 +91,69 @@ Add to `opencode.jsonc` (SSH key recommended; password auth uses the `exec-raw` 
 }
 ```
 
-Use `--password=your-password` instead of `--key=...` for password authentication.
+Use `SSH_MCP_PASSWORD` instead of `--key=...` for password authentication; prefer an MCP environment value over putting secrets in process arguments.
 For `--key`, a leading `~/` is resolved through the local `HOME`; other tilde forms are left unchanged.
+
+### SSH jump host
+
+Configure one jump host with `--jump=USER@HOST[:PORT]` and exactly one independent jump credential. For example, this reaches `radneon@127.0.0.1:2222` as seen from the jump host and uses a different key for each SSH login:
+
+```jsonc
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "ssh-private-host": {
+      "type": "local",
+      "command": [
+        "/absolute/path/to/ssh-mcp",
+        "--host=127.0.0.1",
+        "--port=2222",
+        "--user=radneon",
+        "--key=~/.ssh/radneon",
+        "--jump=lain@193.181.210.172:1109",
+        "--jump-key=~/.ssh/lain"
+      ],
+      "enabled": true
+    }
+  }
+}
+```
+
+`ssh-mcp` reads both private keys locally. It authenticates the jump first, opens an SSH `direct-tcpip` channel to the configured target, then performs a separate target SSH handshake inside that channel. Private key files are never uploaded to either host.
+
+For password authentication, keep secrets out of the command arguments and pass them through the MCP environment. This example uses a jump password and a target key:
+
+```jsonc
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "ssh-private-host": {
+      "type": "local",
+      "command": [
+        "/absolute/path/to/ssh-mcp",
+        "--host=127.0.0.1",
+        "--port=2222",
+        "--user=radneon",
+        "--key=~/.ssh/radneon",
+        "--jump=lain@193.181.210.172:1109"
+      ],
+      "environment": {
+        "SSH_MCP_JUMP_PASSWORD": "{env:JUMP_SSH_PASSWORD}"
+      },
+      "enabled": true
+    }
+  }
+}
+```
+
+Use `SSH_MCP_PASSWORD` for a target password and `SSH_MCP_JUMP_PASSWORD` for a jump password. Jump credentials never inherit target credentials. `--jump-password` is an SSH login password, not a private-key passphrase. Restart OpenCode after changing its configuration.
+
+Transfer behavior through a jump host:
+
+- `exec-raw` uses the persistent nested SSH session and supports key or password authentication on either hop.
+- `rsync`, `sftp`, and `scp` require keys for both target and jump; `ssh-mcp` supplies the target key to the outer client and generates a jump ProxyCommand with the jump key.
+- `auto` safely falls back to `exec-raw` when either hop uses a password. An explicitly requested unsupported local transport returns an error.
+- Jump-backed local OpenSSH transports are currently Unix-only; `auto` still uses `exec-raw` on other platforms.
 
 <details>
 <summary><b>Claude Code</b> — .mcp.json or ~/.claude.json</summary>
@@ -156,6 +217,9 @@ Every flag also has an `SSH_MCP_*` environment variable. Required: `--host`, `--
 | `--port` | `SSH_MCP_PORT` | SSH port (default: 22) |
 | `--password` | `SSH_MCP_PASSWORD` | SSH password (alternative to key) |
 | `--key` | `SSH_MCP_KEY` | Path to private key file (leading `~/` uses local `HOME`) |
+| `--jump` | `SSH_MCP_JUMP` | One jump host as `USER@HOST[:PORT]` |
+| `--jump-key` | `SSH_MCP_JUMP_KEY` | Jump private key path (leading `~/` uses local `HOME`) |
+| `--jump-password` | `SSH_MCP_JUMP_PASSWORD` | Jump SSH login password (alternative to jump key) |
 | `--spool-dir` | `SSH_MCP_SPOOL_DIR` | Absolute local directory for background job logs and state |
 | `--sudo-password` | `SSH_MCP_SUDO_PASSWORD` | Password for `sudo` commands |
 | `--timeout` | `SSH_MCP_TIMEOUT` | Command timeout in ms (default: 300000) |
@@ -173,6 +237,8 @@ The explicit spool path must be absolute. Without it, Unix uses `$XDG_RUNTIME_DI
 - `accept-new` (default): trust and record an unknown key on first connection; reject later changes.
 - `yes`: require the key to already exist in `known_hosts`; reject unknown or changed keys.
 - `no`: disable verification; only for disposable test environments.
+
+With a jump host, the same policy and `known_hosts` file are applied independently to jump and target host/port identities. `accept-new` records unknown keys but rejects changed keys.
 
 ## Long-running jobs
 

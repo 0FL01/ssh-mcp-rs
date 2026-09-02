@@ -3,7 +3,6 @@
 //! Provides persistent SSH connection handling with automatic reconnection,
 //! concurrent access protection, and optional privilege elevation via `su`.
 
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -13,12 +12,10 @@ use russh::client::{self, Handle};
 use russh::keys::{HashAlg, PrivateKeyWithHashAlg};
 use tokio::sync::{Mutex, Notify, OwnedSemaphorePermit, Semaphore};
 use tokio::time::{sleep, timeout};
-use tracing::{debug, error, info, warn};
+use tracing::{debug, info, warn};
 
-use super::config::{HostKeyCheckMode, SshConfig};
-use super::handler::{
-    KeyCheckOutcome, SshHandler, default_known_hosts_path, remove_known_hosts_entry,
-};
+use super::config::SshConfig;
+use super::handler::SshHandler;
 use crate::config::CONNECTION_TIMEOUT_SECS;
 use crate::error::{Result, SshMcpError};
 use russh::ChannelMsg;
@@ -26,7 +23,6 @@ use russh::ChannelMsg;
 /// Default capacity for the channel semaphore (max concurrent commands)
 pub const CHANNEL_SEMAPHORE_CAPACITY: usize = 8;
 const AUTH_TIMEOUT_SECS: u64 = 20;
-const CONNECT_WAIT_TIMEOUT_SECS: u64 = CONNECTION_TIMEOUT_SECS + AUTH_TIMEOUT_SECS;
 const MAX_RECONNECT_BACKOFF_MS: u64 = 30_000;
 const MIN_HEALTH_PROBE_TTL_MS: u64 = 250;
 const MAX_HEALTH_PROBE_TTL_MS: u64 = 5_000;
@@ -34,6 +30,11 @@ const MAX_HEALTH_PROBE_TTL_MS: u64 = 5_000;
 struct ConnectAttemptGuard<'a> {
     is_connecting: &'a AtomicBool,
     connect_notify: &'a Notify,
+}
+
+struct ActiveRoute {
+    target: Handle<SshHandler>,
+    jump: Option<Handle<SshHandler>>,
 }
 
 impl Drop for ConnectAttemptGuard<'_> {
@@ -55,8 +56,8 @@ pub struct SshConnectionManager {
     /// Made pub(crate) to allow access from command.rs for output limiting
     pub(crate) config: SshConfig,
 
-    /// Active SSH session handle
-    session: Arc<Mutex<Option<Handle<SshHandler>>>>,
+    /// Active target session and its optional jump session.
+    session: Arc<Mutex<Option<ActiveRoute>>>,
 
     /// Flag to prevent concurrent connection attempts
     is_connecting: AtomicBool,
@@ -161,19 +162,9 @@ impl SshConnectionManager {
             .is_err()
         {
             debug!("Another connection attempt in progress, waiting...");
-            // Wait for the other connection attempt to complete using Notify
-            let wait_result =
-                timeout(Duration::from_secs(CONNECT_WAIT_TIMEOUT_SECS), notified).await;
-            if wait_result.is_err() {
-                warn!(
-                    "Timed out waiting for in-flight connection attempt after {}s",
-                    CONNECT_WAIT_TIMEOUT_SECS
-                );
-                return Err(SshMcpError::connection(format!(
-                    "Timed out waiting for in-flight connection attempt after {}s",
-                    CONNECT_WAIT_TIMEOUT_SECS
-                )));
-            }
+            // Every establishment phase has its own timeout. Waiting for the
+            // guarded owner avoids a shorter guessed timeout for multi-hop routes.
+            notified.await;
             return if self.is_shutting_down() {
                 self.ensure_not_shutting_down()
             } else if self.is_connected().await {
@@ -192,11 +183,7 @@ impl SshConnectionManager {
         self.do_connect().await
     }
 
-    /// Internal connection logic
-    ///
-    /// On a changed host key in `accept-new` mode, removes the stale
-    /// known_hosts entry and retries once.  All other failures are
-    /// returned immediately.
+    /// Internal connection logic.
     async fn do_connect(&self) -> Result<()> {
         info!(
             "Connecting to SSH server {}:{}...",
@@ -211,129 +198,166 @@ impl SshConnectionManager {
             ..Default::default()
         });
 
-        let addr = format!("{}:{}", self.config.host, self.config.port);
+        let (target, jump) = if let Some(jump_config) = &self.config.jump {
+            info!(
+                "Connecting through jump host {}@{}:{}",
+                jump_config.username, jump_config.host, jump_config.port
+            );
+            let mut jump = self
+                .connect_tcp_endpoint(
+                    &ssh_config,
+                    &jump_config.host,
+                    jump_config.port,
+                    "jump connection",
+                    connection_timeout,
+                )
+                .await?;
+            if let Err(error) = Self::authenticate_session(
+                &mut jump,
+                &jump_config.username,
+                jump_config.password.as_deref(),
+                jump_config.private_key.as_deref(),
+                "jump authentication",
+            )
+            .await
+            {
+                Self::disconnect_handle(jump).await;
+                return Err(error);
+            }
 
-        // First attempt — record key check outcome for recovery decisions.
-        let key_outcome = Arc::new(std::sync::Mutex::new(None::<KeyCheckOutcome>));
-        let handler = SshHandler::new(
+            let tunnel = match timeout(
+                connection_timeout,
+                jump.channel_open_direct_tcpip(
+                    self.config.host.clone(),
+                    u32::from(self.config.port),
+                    "127.0.0.1",
+                    0,
+                ),
+            )
+            .await
+            {
+                Ok(Ok(channel)) => channel,
+                Ok(Err(error)) => {
+                    Self::disconnect_handle(jump).await;
+                    return Err(SshMcpError::connection(format!(
+                        "jump forwarding failed: {error}"
+                    )));
+                }
+                Err(_) => {
+                    Self::disconnect_handle(jump).await;
+                    return Err(SshMcpError::connection(format!(
+                        "jump forwarding timed out after {}s",
+                        CONNECTION_TIMEOUT_SECS
+                    )));
+                }
+            };
+
+            let target_handler = self.target_handler();
+            let target = match timeout(
+                connection_timeout,
+                client::connect_stream(ssh_config.clone(), tunnel.into_stream(), target_handler),
+            )
+            .await
+            {
+                Ok(Ok(session)) => session,
+                Ok(Err(error)) => {
+                    Self::disconnect_handle(jump).await;
+                    return Err(SshMcpError::connection(format!(
+                        "target connection through jump failed: {error}"
+                    )));
+                }
+                Err(_) => {
+                    Self::disconnect_handle(jump).await;
+                    return Err(SshMcpError::connection(format!(
+                        "target connection through jump timed out after {}s",
+                        CONNECTION_TIMEOUT_SECS
+                    )));
+                }
+            };
+            (target, Some(jump))
+        } else {
+            let target = self
+                .connect_tcp_endpoint(
+                    &ssh_config,
+                    &self.config.host,
+                    self.config.port,
+                    "target connection",
+                    connection_timeout,
+                )
+                .await?;
+            (target, None)
+        };
+
+        self.finish_connect(target, jump).await
+    }
+
+    fn target_handler(&self) -> SshHandler {
+        SshHandler::new(
             self.config.host.clone(),
             self.config.port,
             self.config.host_key_checking,
             self.config.known_hosts.clone(),
         )
-        .with_key_check_outcome(key_outcome.clone());
-
-        match self
-            .attempt_connect(&ssh_config, &addr, handler, connection_timeout)
-            .await
-        {
-            Ok(session) => self.finish_connect(session).await,
-            Err(first_err) => {
-                // If the failure was a changed host key in accept-new mode,
-                // remove the stale entry and retry once.
-                let outcome = key_outcome.lock().unwrap().take();
-                if matches!(outcome, Some(KeyCheckOutcome::KeyChanged))
-                    && self.config.host_key_checking == HostKeyCheckMode::AcceptNew
-                {
-                    let Some(path) = self.resolve_known_hosts_path() else {
-                        error!(
-                            host = %self.config.host,
-                            port = self.config.port,
-                            "Host key changed but cannot resolve known_hosts path for recovery"
-                        );
-                        return Err(first_err);
-                    };
-
-                    warn!(
-                        host = %self.config.host,
-                        port = self.config.port,
-                        path = %path.display(),
-                        "Host key changed in accept-new mode; \
-                         removing stale known_hosts entry and retrying once"
-                    );
-                    remove_known_hosts_entry(&self.config.host, self.config.port, &path).map_err(
-                        |e| {
-                            SshMcpError::connection(format!(
-                                "Failed to remove stale known_hosts entry: {e}"
-                            ))
-                        },
-                    )?;
-
-                    // Single retry — fresh handler, no outcome recording.
-                    let retry_handler = SshHandler::new(
-                        self.config.host.clone(),
-                        self.config.port,
-                        self.config.host_key_checking,
-                        self.config.known_hosts.clone(),
-                    );
-                    match self
-                        .attempt_connect(&ssh_config, &addr, retry_handler, connection_timeout)
-                        .await
-                    {
-                        Ok(session) => {
-                            info!(
-                                host = %self.config.host,
-                                port = self.config.port,
-                                "SSH reconnection succeeded after host key rotation"
-                            );
-                            self.finish_connect(session).await
-                        }
-                        Err(retry_err) => {
-                            error!(
-                                error = ?retry_err,
-                                "SSH connection failed on retry after key rotation"
-                            );
-                            Err(retry_err)
-                        }
-                    }
-                } else {
-                    error!(error = ?first_err, "SSH connection failed");
-                    Err(first_err)
-                }
-            }
-        }
     }
 
-    /// Attempt a single SSH connection (no retry logic).
-    async fn attempt_connect(
+    async fn connect_tcp_endpoint(
         &self,
         ssh_config: &Arc<client::Config>,
-        addr: &str,
-        handler: SshHandler,
+        host: &str,
+        port: u16,
+        stage: &str,
         connection_timeout: Duration,
     ) -> Result<Handle<SshHandler>> {
+        let addr = format!("{host}:{port}");
+        let handler = SshHandler::new(
+            host.to_string(),
+            port,
+            self.config.host_key_checking,
+            self.config.known_hosts.clone(),
+        );
         timeout(
             connection_timeout,
-            client::connect(ssh_config.clone(), addr, handler),
+            client::connect(ssh_config.clone(), &addr, handler),
         )
         .await
         .map_err(|_| {
-            error!("SSH connection timeout after {}s", CONNECTION_TIMEOUT_SECS);
             SshMcpError::connection(format!(
-                "Connection timeout after {}s",
+                "{stage} timed out after {}s",
                 CONNECTION_TIMEOUT_SECS
             ))
         })?
-        .map_err(|e| SshMcpError::connection(e.to_string()))
+        .map_err(|error| SshMcpError::connection(format!("{stage} failed: {error}")))
     }
 
     /// Authenticate, store the session, and optionally elevate.
-    async fn finish_connect(&self, mut session: Handle<SshHandler>) -> Result<()> {
-        // Authenticate
-        self.authenticate(&mut session).await?;
+    async fn finish_connect(
+        &self,
+        mut target: Handle<SshHandler>,
+        jump: Option<Handle<SshHandler>>,
+    ) -> Result<()> {
+        if let Err(error) = Self::authenticate_session(
+            &mut target,
+            &self.config.username,
+            self.config.password.as_deref(),
+            self.config.private_key.as_deref(),
+            "target authentication",
+        )
+        .await
+        {
+            Self::disconnect_route(ActiveRoute { target, jump }).await;
+            return Err(error);
+        }
 
         // Do not publish a connection that completed after shutdown began.
-        let mut session = Some(session);
+        let mut route = Some(ActiveRoute { target, jump });
         {
             let mut session_guard = self.session.lock().await;
             if !self.is_shutting_down() {
-                *session_guard = session.take();
+                *session_guard = route.take();
             }
         }
-        if let Some(session) = session {
-            let _ = session
-                .disconnect(russh::Disconnect::ByApplication, "", "")
-                .await;
+        if let Some(route) = route {
+            Self::disconnect_route(route).await;
             return self.ensure_not_shutting_down();
         }
         {
@@ -357,55 +381,43 @@ impl SshConnectionManager {
         Ok(())
     }
 
-    /// Resolve the known_hosts file path — explicit config or default.
-    fn resolve_known_hosts_path(&self) -> Option<PathBuf> {
-        self.config
-            .known_hosts
-            .clone()
-            .or_else(default_known_hosts_path)
-    }
-
     /// Authenticate with the SSH server
-    async fn authenticate(&self, session: &mut Handle<SshHandler>) -> Result<()> {
+    async fn authenticate_session(
+        session: &mut Handle<SshHandler>,
+        username: &str,
+        password: Option<&str>,
+        private_key: Option<&str>,
+        stage: &str,
+    ) -> Result<()> {
         // Try password authentication first
-        if let Some(ref password) = self.config.password {
-            debug!(
-                "Attempting password authentication for user '{}'",
-                self.config.username
-            );
+        if let Some(password) = password {
+            debug!("Attempting {stage} with password for user '{username}'");
             let auth_result = timeout(
                 Duration::from_secs(AUTH_TIMEOUT_SECS),
-                session.authenticate_password(&self.config.username, password),
+                session.authenticate_password(username, password),
             )
             .await
             .map_err(|_| {
-                SshMcpError::auth(format!(
-                    "Authentication timed out after {}s",
-                    AUTH_TIMEOUT_SECS
-                ))
+                SshMcpError::auth(format!("{stage} timed out after {}s", AUTH_TIMEOUT_SECS))
             })?
-            .map_err(|e| SshMcpError::auth(e.to_string()))?;
+            .map_err(|error| SshMcpError::auth(format!("{stage} failed: {error}")))?;
 
             if auth_result.success() {
-                info!("Password authentication successful");
+                info!("{stage} with password successful");
                 return Ok(());
             } else {
-                return Err(SshMcpError::auth("Password authentication rejected"));
+                return Err(SshMcpError::auth(format!("{stage} rejected password")));
             }
         }
 
         // Try key authentication
-        if let Some(ref key_content) = self.config.private_key {
-            debug!(
-                "Attempting key authentication for user '{}'",
-                self.config.username
-            );
+        if let Some(key_content) = private_key {
+            debug!("Attempting {stage} with key for user '{username}'");
 
             // Parse the private key using russh::keys
             let key = Arc::new(
-                russh::keys::PrivateKey::from_openssh(key_content.as_bytes()).map_err(|e| {
-                    SshMcpError::SshKey(format!("Failed to parse private key: {}", e))
-                })?,
+                russh::keys::PrivateKey::from_openssh(key_content.as_bytes())
+                    .map_err(|e| SshMcpError::SshKey(format!("{stage} key parsing failed: {e}")))?,
             );
 
             // For RSA, try modern rsa-sha2-256/512 first, then legacy ssh-rsa (SHA-1) as fallback.
@@ -427,29 +439,40 @@ impl SshConnectionManager {
 
                 let auth_result = timeout(
                     Duration::from_secs(AUTH_TIMEOUT_SECS),
-                    session.authenticate_publickey(&self.config.username, key_with_alg),
+                    session.authenticate_publickey(username, key_with_alg),
                 )
                 .await
                 .map_err(|_| {
-                    SshMcpError::auth(format!(
-                        "Authentication timed out after {}s",
-                        AUTH_TIMEOUT_SECS
-                    ))
+                    SshMcpError::auth(format!("{stage} timed out after {}s", AUTH_TIMEOUT_SECS))
                 })?
-                .map_err(|e| SshMcpError::auth(e.to_string()))?;
+                .map_err(|error| SshMcpError::auth(format!("{stage} failed: {error}")))?;
 
                 if auth_result.success() {
-                    info!("Key authentication successful");
+                    info!("{stage} with key successful");
                     return Ok(());
                 }
             }
 
-            return Err(SshMcpError::auth("Key authentication rejected"));
+            return Err(SshMcpError::auth(format!("{stage} rejected key")));
         }
 
-        Err(SshMcpError::auth(
-            "No authentication method available (require password or private_key)",
-        ))
+        Err(SshMcpError::auth(format!(
+            "{stage} has no authentication method"
+        )))
+    }
+
+    async fn disconnect_handle(session: Handle<SshHandler>) {
+        let _ = session
+            .disconnect(russh::Disconnect::ByApplication, "", "")
+            .await;
+        let _ = timeout(Duration::from_millis(500), session).await;
+    }
+
+    async fn disconnect_route(route: ActiveRoute) {
+        Self::disconnect_handle(route.target).await;
+        if let Some(jump) = route.jump {
+            Self::disconnect_handle(jump).await;
+        }
     }
 
     /// Check if the connection is active
@@ -518,13 +541,13 @@ impl SshConnectionManager {
     async fn run_health_probe(&self) -> Result<()> {
         let ping_result = {
             let session_guard = self.session.lock().await;
-            let session = session_guard
+            let route = session_guard
                 .as_ref()
                 .ok_or_else(|| SshMcpError::connection("SSH connection not established"))?;
 
             timeout(
                 Duration::from_millis(self.config.health_probe_timeout_ms),
-                session.send_ping(),
+                route.target.send_ping(),
             )
             .await
         };
@@ -608,7 +631,7 @@ impl SshConnectionManager {
         self.ensure_not_shutting_down()?;
         let session_guard = self.session.lock().await;
         match session_guard.as_ref() {
-            Some(session) => Ok(f(session)),
+            Some(route) => Ok(f(&route.target)),
             None => Err(SshMcpError::connection("SSH connection not established")),
         }
     }
@@ -617,11 +640,12 @@ impl SshConnectionManager {
     pub async fn open_channel(&self) -> Result<Channel<client::Msg>> {
         self.ensure_not_shutting_down()?;
         let session_guard = self.session.lock().await;
-        let session = session_guard
+        let route = session_guard
             .as_ref()
             .ok_or_else(|| SshMcpError::connection("SSH connection not established"))?;
 
-        let channel = session
+        let channel = route
+            .target
             .channel_open_session()
             .await
             .map_err(|e| SshMcpError::connection(format!("Failed to open channel: {}", e)))?;
@@ -974,15 +998,13 @@ impl SshConnectionManager {
         }
         self.is_elevated.store(false, Ordering::SeqCst);
 
-        // Close main session
-        let session = {
+        // Close target first, then the jump session that carries it.
+        let route = {
             let mut session_guard = self.session.lock().await;
             session_guard.take()
         };
-        if let Some(session) = session {
-            let _ = session
-                .disconnect(russh::Disconnect::ByApplication, "", "")
-                .await;
+        if let Some(route) = route {
+            Self::disconnect_route(route).await;
         }
 
         {
@@ -1013,17 +1035,13 @@ impl SshConnectionManager {
         self.is_elevated.store(false, Ordering::SeqCst);
 
         // Attempt best-effort graceful disconnect with short timeout.
-        let session = {
+        let route = {
             let mut session_guard = self.session.lock().await;
             session_guard.take()
         };
 
-        if let Some(session) = session {
-            let _ = tokio::time::timeout(
-                Duration::from_millis(500),
-                session.disconnect(russh::Disconnect::ByApplication, "", ""),
-            )
-            .await;
+        if let Some(route) = route {
+            Self::disconnect_route(route).await;
         }
 
         {

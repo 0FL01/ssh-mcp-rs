@@ -67,6 +67,18 @@ pub struct Args {
     #[arg(long, env = "SSH_MCP_KEY")]
     pub key: Option<PathBuf>,
 
+    /// SSH jump host in USER@HOST[:PORT] form
+    #[arg(long, env = "SSH_MCP_JUMP")]
+    pub jump: Option<String>,
+
+    /// Path to the jump host SSH private key file
+    #[arg(long, env = "SSH_MCP_JUMP_KEY")]
+    pub jump_key: Option<PathBuf>,
+
+    /// SSH login password for the jump host
+    #[arg(long, env = "SSH_MCP_JUMP_PASSWORD")]
+    pub jump_password: Option<String>,
+
     /// Absolute local directory for background job logs and state
     #[arg(long, env = "SSH_MCP_SPOOL_DIR")]
     pub spool_dir: Option<PathBuf>,
@@ -170,6 +182,9 @@ pub struct Config {
     /// Path to SSH private key
     pub key: Option<PathBuf>,
 
+    /// Optional SSH jump host and its independent credentials
+    pub jump: Option<JumpConfig>,
+
     /// Password for su elevation
     pub su_password: Option<String>,
 
@@ -210,6 +225,16 @@ pub struct Config {
     pub known_hosts: Option<PathBuf>,
 }
 
+/// One SSH jump host with credentials independent from the target host.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct JumpConfig {
+    pub host: String,
+    pub port: u16,
+    pub user: String,
+    pub password: Option<String>,
+    pub key: Option<PathBuf>,
+}
+
 impl Config {
     /// Create Config from CLI Args
     pub fn from_args(args: Args) -> Result<Self> {
@@ -218,11 +243,32 @@ impl Config {
     }
 
     fn from_args_with_home(mut args: Args, home: Option<&OsStr>) -> Result<Self> {
+        args.password = sanitize_password(args.password);
+        args.jump_password = sanitize_password(args.jump_password);
+        args.su_password = sanitize_password(args.su_password);
+        args.sudo_password = sanitize_password(args.sudo_password);
         args.key = args
             .key
             .map(|path| expand_key_path(path, home))
             .transpose()?;
+        args.jump_key = args
+            .jump_key
+            .map(|path| expand_key_path(path, home))
+            .transpose()?;
         validate_args(&args)?;
+
+        let jump = args
+            .jump
+            .as_deref()
+            .map(parse_jump_endpoint)
+            .transpose()?
+            .map(|(user, host, port)| JumpConfig {
+                host,
+                port,
+                user,
+                password: args.jump_password,
+                key: args.jump_key,
+            });
 
         let max_chars = parse_max_chars(args.max_chars.as_deref());
         let max_output_tokens = parse_max_output_tokens(args.max_output_tokens.as_deref());
@@ -231,10 +277,11 @@ impl Config {
             host: args.host,
             port: args.port,
             user: args.user,
-            password: sanitize_password(args.password),
+            password: args.password,
             key: args.key,
-            su_password: sanitize_password(args.su_password),
-            sudo_password: sanitize_password(args.sudo_password),
+            jump,
+            su_password: args.su_password,
+            sudo_password: args.sudo_password,
             timeout_ms: args.timeout,
             max_chars,
             max_output_tokens,
@@ -248,6 +295,39 @@ impl Config {
             known_hosts: args.known_hosts,
         })
     }
+}
+
+fn parse_jump_endpoint(value: &str) -> Result<(String, String, u16)> {
+    let (user, endpoint) = value.split_once('@').ok_or_else(|| {
+        SshMcpError::Config("--jump must use USER@HOST[:PORT] format".to_string())
+    })?;
+    if user.is_empty() || endpoint.is_empty() || endpoint.contains('@') {
+        return Err(SshMcpError::Config(
+            "--jump must use USER@HOST[:PORT] format".to_string(),
+        ));
+    }
+
+    let (host, port) = match endpoint.rsplit_once(':') {
+        Some((host, port)) => {
+            let port = port.parse::<u16>().map_err(|_| {
+                SshMcpError::Config("--jump port must be an integer from 1 to 65535".to_string())
+            })?;
+            (host, port)
+        }
+        None => (endpoint, 22),
+    };
+
+    if host.is_empty()
+        || port == 0
+        || user.chars().any(char::is_whitespace)
+        || host.chars().any(char::is_whitespace)
+    {
+        return Err(SshMcpError::Config(
+            "--jump must use USER@HOST[:PORT] with non-empty values".to_string(),
+        ));
+    }
+
+    Ok((user.to_string(), host.to_string(), port))
 }
 
 fn expand_key_path(path: PathBuf, home: Option<&OsStr>) -> Result<PathBuf> {
@@ -285,11 +365,36 @@ fn validate_args(args: &Args) -> Result<()> {
         errors.push("Must provide either --password or --key".to_string());
     }
 
+    match (
+        args.jump.is_some(),
+        args.jump_key.is_some(),
+        args.jump_password.is_some(),
+    ) {
+        (false, false, false) | (true, true, false) | (true, false, true) => {}
+        (false, _, _) => errors.push("Jump credentials require --jump".to_string()),
+        (true, false, false) => {
+            errors.push("--jump requires exactly one of --jump-key or --jump-password".to_string())
+        }
+        (true, true, true) => errors.push(
+            "--jump-key and --jump-password are mutually exclusive; provide exactly one"
+                .to_string(),
+        ),
+    }
+
     // If key is provided, check if file exists
     if let Some(ref key_path) = args.key
         && !key_path.exists()
     {
         errors.push(format!("SSH key file not found: {}", key_path.display()));
+    }
+
+    if let Some(ref key_path) = args.jump_key
+        && !key_path.exists()
+    {
+        errors.push(format!(
+            "Jump SSH key file not found: {}",
+            key_path.display()
+        ));
     }
 
     if args.reconnect_retries > MAX_RECONNECT_RETRIES {
@@ -399,6 +504,9 @@ mod tests {
             user: "test".to_string(),
             password: Some("secret".to_string()),
             key: None,
+            jump: None,
+            jump_key: None,
+            jump_password: None,
             spool_dir: None,
             su_password: None,
             sudo_password: None,
@@ -474,6 +582,55 @@ mod tests {
 
         let config = Config::from_args_with_home(args, Some(home.path().as_os_str())).unwrap();
         assert_eq!(config.key, Some(key_path));
+    }
+
+    #[test]
+    fn test_config_parses_jump_with_independent_key() {
+        let home = tempfile::tempdir().unwrap();
+        let key_path = home.path().join(".ssh/lain");
+        std::fs::create_dir_all(key_path.parent().unwrap()).unwrap();
+        std::fs::write(&key_path, "test key").unwrap();
+
+        let mut args = base_args();
+        args.jump = Some("lain@193.181.210.172:1109".to_string());
+        args.jump_key = Some(PathBuf::from("~/.ssh/lain"));
+
+        let config = Config::from_args_with_home(args, Some(home.path().as_os_str())).unwrap();
+        assert_eq!(
+            config.jump,
+            Some(JumpConfig {
+                host: "193.181.210.172".to_string(),
+                port: 1109,
+                user: "lain".to_string(),
+                password: None,
+                key: Some(key_path),
+            })
+        );
+    }
+
+    #[test]
+    fn test_jump_validation_requires_one_credential() {
+        let mut missing = base_args();
+        missing.jump = Some("lain@example.com".to_string());
+        assert!(Config::from_args(missing).is_err());
+
+        let mut orphan = base_args();
+        orphan.jump_password = Some("secret".to_string());
+        assert!(Config::from_args(orphan).is_err());
+
+        let key = tempfile::NamedTempFile::new().unwrap();
+        let mut both = base_args();
+        both.jump = Some("lain@example.com".to_string());
+        both.jump_key = Some(key.path().to_path_buf());
+        both.jump_password = Some("secret".to_string());
+        assert!(Config::from_args(both).is_err());
+    }
+
+    #[test]
+    fn test_empty_password_is_absent_before_validation() {
+        let mut args = base_args();
+        args.password = Some(String::new());
+        assert!(Config::from_args(args).is_err());
     }
 
     #[test]

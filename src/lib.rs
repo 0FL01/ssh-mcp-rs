@@ -24,14 +24,14 @@
 //! # Example Usage (CLI)
 //!
 //! ```bash
-//! ssh-mcp --host=192.168.1.100 --user=admin --password=secret
+//! SSH_MCP_PASSWORD=secret ssh-mcp --host=192.168.1.100 --user=admin
 //! ```
 //!
 //! # Example Usage (MCP Inspector)
 //!
 //! ```bash
 //! npx @modelcontextprotocol/inspector ./target/release/ssh-mcp -- \
-//!   --host=YOUR_HOST --user=root --password=pass
+//!   --host=YOUR_HOST --user=root --key=~/.ssh/id_ed25519
 //! ```
 
 pub mod background;
@@ -49,11 +49,11 @@ pub mod transfer;
 pub(crate) mod validate;
 
 // Re-exports for convenience
-pub use config::{Args, Config};
+pub use config::{Args, Config, JumpConfig};
 pub use error::{Result, SshMcpError};
 pub use server::SshMcpServer;
 pub use ssh::{
-    CommandOutput, HostKeyCheckMode, SshConfig, SshConnectionManager, SshHandler,
+    CommandOutput, HostKeyCheckMode, SshConfig, SshConnectionManager, SshHandler, SshJumpConfig,
     escape_command_for_shell, escape_for_shell, escape_for_timeout_wrapper, sanitize_command,
     sanitize_password, wrap_command_with_timeout, wrap_sudo_command,
 };

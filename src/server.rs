@@ -31,12 +31,13 @@ use crate::server::handlers::file_edit_common::{FileEditFaultInjection, FileEdit
 #[cfg(test)]
 use crate::server::validation::validate_background_log_path;
 use crate::ssh::{
-    CommandOutput, SshConfig, SshConnectionManager, sanitize_command, wrap_sudo_command,
+    CommandOutput, SshConfig, SshConnectionManager, SshJumpConfig, sanitize_command,
+    wrap_sudo_command,
 };
 use crate::tools::ApplyPatchParams;
 use crate::transfer::{
-    TransferEngine, TransferEventSink, TransferParams, TransferResponse, TransferRunContext,
-    TransferSshOptions,
+    TransferEngine, TransferEventSink, TransferJumpOptions, TransferParams, TransferResponse,
+    TransferRunContext, TransferSshOptions,
 };
 
 mod args;
@@ -160,6 +161,36 @@ impl SshMcpServer {
                 .await
                 .map_err(SshMcpError::Io)?;
             ssh_config = ssh_config.with_private_key(&key_content);
+        }
+
+        if let Some(ref jump) = config.jump {
+            let jump_password = jump.password.clone().filter(|value| !value.is_empty());
+            if jump.user.is_empty()
+                || jump.host.is_empty()
+                || jump.port == 0
+                || jump.key.is_some() == jump_password.is_some()
+            {
+                return Err(SshMcpError::config(
+                    "jump requires a valid endpoint and exactly one key or password",
+                ));
+            }
+
+            let jump_private_key = match &jump.key {
+                Some(path) => Some(tokio::fs::read_to_string(path).await.map_err(|error| {
+                    SshMcpError::config(format!(
+                        "failed to read jump SSH key {}: {error}",
+                        path.display()
+                    ))
+                })?),
+                None => None,
+            };
+            ssh_config = ssh_config.with_jump(SshJumpConfig {
+                host: jump.host.clone(),
+                port: jump.port,
+                username: jump.user.clone(),
+                password: jump_password,
+                private_key: jump_private_key,
+            });
         }
 
         // Add elevation passwords if provided
@@ -566,6 +597,12 @@ impl SshMcpServer {
                         key_path,
                         host_key_checking: self.config.strict_host_key_checking,
                         known_hosts: self.config.known_hosts.clone(),
+                        jump: self.config.jump.as_ref().map(|jump| TransferJumpOptions {
+                            host: jump.host.clone(),
+                            port: jump.port,
+                            user: jump.user.clone(),
+                            key_path: jump.key.clone(),
+                        }),
                     },
                 },
                 cancellation,

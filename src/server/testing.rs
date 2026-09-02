@@ -196,7 +196,7 @@ impl SshMcpServer {
             .unwrap_or(self.timeout);
         let key_path = self.config.key.clone();
 
-        use crate::transfer::{TransferRunContext, TransferSshOptions};
+        use crate::transfer::{TransferJumpOptions, TransferRunContext, TransferSshOptions};
         self.transfer
             .run_controlled(
                 &self.connection,
@@ -210,6 +210,12 @@ impl SshMcpServer {
                         key_path,
                         host_key_checking: self.config.strict_host_key_checking,
                         known_hosts: self.config.known_hosts.clone(),
+                        jump: self.config.jump.as_ref().map(|jump| TransferJumpOptions {
+                            host: jump.host.clone(),
+                            port: jump.port,
+                            user: jump.user.clone(),
+                            key_path: jump.key.clone(),
+                        }),
                     },
                 },
                 tokio_util::sync::CancellationToken::new(),

@@ -44,6 +44,12 @@ async fn run() -> Result<()> {
         "Connecting to {}@{}:{}",
         config.user, config.host, config.port
     );
+    if let Some(jump) = &config.jump {
+        info!(
+            "Routing through jump host {}@{}:{}",
+            jump.user, jump.host, jump.port
+        );
+    }
     info!(
         "Timeout: {}ms, Max chars: {}",
         config.timeout_ms,

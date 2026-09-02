@@ -10,6 +10,7 @@ fn docker_test_config(host: &str, port: u16) -> Config {
         user: "test".to_string(),
         password: Some("secret".to_string()),
         key: None,
+        jump: None,
         su_password: None,
         sudo_password: None,
         timeout_ms: 15_000,

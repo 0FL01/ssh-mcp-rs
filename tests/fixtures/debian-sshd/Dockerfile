@@ -17,6 +17,10 @@ RUN useradd -m -s /bin/bash test && \
     printf 'test ALL=(ALL) NOPASSWD:ALL\n' > /etc/sudoers.d/test && \
     chmod 440 /etc/sudoers.d/test
 
+# Create a separate jump-only identity for multi-hop authentication tests
+RUN useradd -m -s /bin/bash jump && \
+    echo "jump:jump-secret" | chpasswd
+
 # Generate SSH host keys
 RUN ssh-keygen -A
 
@@ -35,6 +39,12 @@ RUN mkdir -p /home/test/.ssh && \
     chown -R test:test /home/test/.ssh && \
     chmod 700 /home/test/.ssh && \
     chmod 600 /home/test/.ssh/authorized_keys
+
+RUN mkdir -p /home/jump/.ssh && \
+    echo "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAR4VxaEKYwPbBI6WbiVLmkXVXSLoIM5Se/Xw4n+jSS3 ssh-mcp-jump-test" > /home/jump/.ssh/authorized_keys && \
+    chown -R jump:jump /home/jump/.ssh && \
+    chmod 700 /home/jump/.ssh && \
+    chmod 600 /home/jump/.ssh/authorized_keys
 
 # Create runtime directory for sshd
 RUN mkdir -p /run/sshd

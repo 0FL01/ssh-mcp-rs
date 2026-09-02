@@ -28,6 +28,7 @@ pub struct OpenSshEndpoint {
     pub key_path: PathBuf,
     pub host_key_checking: HostKeyCheckMode,
     pub known_hosts: Option<PathBuf>,
+    pub jump: Option<super::TransferJumpOptions>,
 }
 
 #[derive(Debug, Clone)]
@@ -115,6 +116,8 @@ fn common_ssh_options(endpoint: &OpenSshEndpoint) -> Vec<String> {
         "-o".to_string(),
         "PreferredAuthentications=publickey".to_string(),
         "-o".to_string(),
+        "IdentitiesOnly=yes".to_string(),
+        "-o".to_string(),
         format!(
             "StrictHostKeyChecking={}",
             endpoint.host_key_checking.as_openssh_value()
@@ -136,6 +139,20 @@ fn common_ssh_options(endpoint: &OpenSshEndpoint) -> Vec<String> {
 
     opts.push("-o".to_string());
     opts.push("LogLevel=ERROR".to_string());
+
+    #[cfg(unix)]
+    if let Some(jump) = &endpoint.jump
+        && let Some(proxy) = super::openssh_proxy_command(
+            &endpoint.host,
+            endpoint.port,
+            jump,
+            endpoint.host_key_checking,
+            endpoint.known_hosts.as_deref(),
+        )
+    {
+        opts.push("-o".to_string());
+        opts.push(format!("ProxyCommand={proxy}"));
+    }
     opts
 }
 
@@ -272,6 +289,17 @@ async fn preflight(
     timeout: Duration,
     cancellation: &CancellationToken,
 ) -> std::result::Result<(), super::TransportAttemptError> {
+    if endpoint.jump.is_some() {
+        super::check_local_ssh(
+            match transport {
+                OpenSshTransport::Sftp => super::TransferTransport::Sftp,
+                OpenSshTransport::Scp => super::TransferTransport::Scp,
+            },
+            timeout,
+            cancellation,
+        )
+        .await?;
+    }
     match transport {
         OpenSshTransport::Sftp => {
             let out = run_sftp_batch(endpoint, "quit\n", timeout, cancellation).await?;
@@ -629,6 +657,7 @@ mod tests {
             key_path: PathBuf::from("/k"),
             host_key_checking: HostKeyCheckMode::No,
             known_hosts: None,
+            jump: None,
         };
         let spec = scp_remote_spec(&endpoint, "/path/with space/it's.txt");
         assert_eq!(spec, "alice@example.com:'/path/with space/it'\"'\"'s.txt'");
@@ -643,6 +672,7 @@ mod tests {
             key_path: PathBuf::from("/k"),
             host_key_checking: HostKeyCheckMode::No,
             known_hosts: None,
+            jump: None,
         };
         let opts = common_ssh_options(&endpoint);
         assert!(opts.contains(&"StrictHostKeyChecking=no".to_string()));
@@ -658,9 +688,39 @@ mod tests {
             key_path: PathBuf::from("/k"),
             host_key_checking: HostKeyCheckMode::AcceptNew,
             known_hosts: Some(PathBuf::from("/tmp/known_hosts")),
+            jump: None,
         };
         let opts = common_ssh_options(&endpoint);
         assert!(opts.contains(&"StrictHostKeyChecking=accept-new".to_string()));
         assert!(opts.contains(&"UserKnownHostsFile=/tmp/known_hosts".to_string()));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_common_ssh_options_adds_structured_jump_proxy() {
+        let endpoint = OpenSshEndpoint {
+            host: "127.0.0.1".to_string(),
+            port: 2222,
+            user: "radneon".to_string(),
+            key_path: PathBuf::from("/keys/target key"),
+            host_key_checking: HostKeyCheckMode::Yes,
+            known_hosts: Some(PathBuf::from("/tmp/known hosts")),
+            jump: Some(super::super::TransferJumpOptions {
+                host: "193.181.210.172".to_string(),
+                port: 1109,
+                user: "lain".to_string(),
+                key_path: Some(PathBuf::from("/keys/jump key")),
+            }),
+        };
+
+        let proxy = common_ssh_options(&endpoint)
+            .into_iter()
+            .find(|option| option.starts_with("ProxyCommand="))
+            .expect("proxy command");
+        assert!(proxy.contains("-i '/keys/jump key'"));
+        assert!(proxy.contains("-p 1109"));
+        assert!(proxy.contains("-W '127.0.0.1:2222'"));
+        assert!(proxy.contains("'lain@193.181.210.172'"));
+        assert!(!proxy.contains("/keys/target key"));
     }
 }

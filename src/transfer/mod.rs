@@ -31,11 +31,12 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Duration;
 
+use tokio::process::Command;
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 
 use crate::error::{Result, SshMcpError};
-use crate::ssh::{HostKeyCheckMode, SshConnectionManager};
+use crate::ssh::{HostKeyCheckMode, SshConnectionManager, escape_for_shell};
 
 fn io_to_transport_attempt(err: std::io::Error) -> TransportAttemptError {
     TransportAttemptError::Other(SshMcpError::Io(err))
@@ -112,6 +113,95 @@ pub struct TransferSshOptions {
     pub key_path: Option<PathBuf>,
     pub host_key_checking: HostKeyCheckMode,
     pub known_hosts: Option<PathBuf>,
+    pub jump: Option<TransferJumpOptions>,
+}
+
+#[derive(Clone, Debug)]
+pub struct TransferJumpOptions {
+    pub host: String,
+    pub port: u16,
+    pub user: String,
+    pub key_path: Option<PathBuf>,
+}
+
+#[cfg(unix)]
+fn openssh_proxy_command(
+    target_host: &str,
+    target_port: u16,
+    jump: &TransferJumpOptions,
+    host_key_checking: HostKeyCheckMode,
+    known_hosts: Option<&Path>,
+) -> Option<String> {
+    let key_path = jump.key_path.as_ref()?;
+    let quote = |value: &str| format!("'{}'", escape_for_shell(value));
+    let mut parts = vec![
+        "ssh".to_string(),
+        "-i".to_string(),
+        quote(&key_path.display().to_string()),
+        "-p".to_string(),
+        jump.port.to_string(),
+        "-o".to_string(),
+        "BatchMode=yes".to_string(),
+        "-o".to_string(),
+        "PasswordAuthentication=no".to_string(),
+        "-o".to_string(),
+        "KbdInteractiveAuthentication=no".to_string(),
+        "-o".to_string(),
+        "PreferredAuthentications=publickey".to_string(),
+        "-o".to_string(),
+        "IdentitiesOnly=yes".to_string(),
+        "-o".to_string(),
+        format!(
+            "StrictHostKeyChecking={}",
+            host_key_checking.as_openssh_value()
+        ),
+    ];
+    match host_key_checking {
+        HostKeyCheckMode::No => {
+            parts.push("-o".to_string());
+            parts.push("UserKnownHostsFile=/dev/null".to_string());
+        }
+        HostKeyCheckMode::Yes | HostKeyCheckMode::AcceptNew => {
+            if let Some(path) = known_hosts {
+                parts.push("-o".to_string());
+                parts.push(quote(&format!("UserKnownHostsFile={}", path.display())));
+            }
+        }
+    }
+    parts.push("-W".to_string());
+    parts.push(quote(&format!("{target_host}:{target_port}")));
+    parts.push(quote(&format!("{}@{}", jump.user, jump.host)));
+    Some(parts.join(" "))
+}
+
+async fn check_local_ssh(
+    transport: TransferTransport,
+    timeout: Duration,
+    cancellation: &CancellationToken,
+) -> std::result::Result<(), TransportAttemptError> {
+    let mut command = Command::new("ssh");
+    command
+        .arg("-V")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    process::configure_child_command(&mut command);
+    let child = command.spawn().map_err(|error| {
+        process::classify_spawn_error_with_reason(
+            error,
+            transport,
+            "missing local OpenSSH binary 'ssh'".to_string(),
+        )
+    })?;
+    let output = process::wait_child_with_timeout(child, timeout, cancellation).await?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(TransportAttemptError::FallbackSafe {
+            transport,
+            reason: "local 'ssh -V' failed".to_string(),
+        })
+    }
 }
 
 struct DestinationGuard {
@@ -434,19 +524,18 @@ impl TransferEngine {
             response.fallback_chain = attempted_transports;
         }
 
-        if !response.ok
-            && response.error.is_none()
-            && response.params.transport == TransferTransport::Auto
-        {
+        if !response.ok && response.error.is_none() {
             let all_reasons = unsupported_reasons;
 
             if all_reasons.is_empty() {
-                response.set_error("all transfer transports failed");
-            } else {
+                response.set_error("transfer transport failed");
+            } else if response.params.transport == TransferTransport::Auto {
                 response.set_error(&format!(
                     "all auto transports failed: {}",
                     all_reasons.join("; ")
                 ));
+            } else {
+                response.set_error(&all_reasons.join("; "));
             }
         }
 
@@ -610,6 +699,25 @@ impl TransferEngine {
             }
         };
 
+        if let Some(jump) = &ctx.ssh.jump {
+            let unsupported = if !cfg!(unix) {
+                Some("jump-backed OpenSSH transfers are unsupported on this platform")
+            } else if jump.key_path.is_none() {
+                Some("jump host key required for OpenSSH transports; use auto or exec-raw")
+            } else {
+                None
+            };
+            if let Some(reason) = unsupported {
+                return Err(TransportAttemptError::FallbackSafe {
+                    transport: match op.transport {
+                        openssh::OpenSshTransport::Sftp => TransferTransport::Sftp,
+                        openssh::OpenSshTransport::Scp => TransferTransport::Scp,
+                    },
+                    reason: reason.to_string(),
+                });
+            }
+        }
+
         let kind = op.kind;
         let response = op.response;
 
@@ -658,6 +766,7 @@ impl TransferEngine {
             key_path: key_path.to_path_buf(),
             host_key_checking: ctx.ssh.host_key_checking,
             known_hosts: ctx.ssh.known_hosts.clone(),
+            jump: ctx.ssh.jump.clone(),
         };
 
         let overwrite = response.params.overwrite;
@@ -701,6 +810,21 @@ impl TransferEngine {
                 transport: TransferTransport::Rsync,
                 reason: "SSH key required for rsync transport".to_string(),
             });
+        }
+        if let Some(jump) = &ctx.ssh.jump {
+            let unsupported = if !cfg!(unix) {
+                Some("jump-backed rsync is unsupported on this platform")
+            } else if jump.key_path.is_none() {
+                Some("jump host key required for rsync; use auto or exec-raw")
+            } else {
+                None
+            };
+            if let Some(reason) = unsupported {
+                return Err(TransportAttemptError::FallbackSafe {
+                    transport: TransferTransport::Rsync,
+                    reason: reason.to_string(),
+                });
+            }
         }
 
         let resolved = self
@@ -748,6 +872,7 @@ impl TransferEngine {
             key_path: ctx.key_path.map(|p| p.to_path_buf()),
             host_key_checking: ctx.ssh.host_key_checking,
             known_hosts: ctx.ssh.known_hosts.clone(),
+            jump: ctx.ssh.jump.clone(),
         };
 
         let overwrite = response.params.overwrite;
